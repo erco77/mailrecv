@@ -3,6 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+//
+// With reference to: https://www.mitchr.me/SS/exampleCode/AUPG/pcre_example.c.html
+//    -erco 08/25/2018
+//
+
 int main() {
     const char *regex_errorstr;		// returned error if any
     int         regex_erroroff;		// returned error offset

@@ -28,6 +28,7 @@
 #include <string.h>     // strchr(), strerror()
 #include <errno.h>      // errno
 #include <stdlib.h>     // exit()
+#include <pcre.h>       // perl regular expressions API (see 'man pcreapi(3)')
 #include <sys/socket.h> // getpeername()
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -43,25 +44,70 @@ using namespace std;
 int G_debug = 0;
 
 // Do a regular expression match test
-//     Returns 0 on match, -1 on no match
+// 
+//     regex -- regular expression to match against string
+//     match -- string to be matched
 //
-int RegexMatch(const char*regex, const char *str) {
-    return 1;               // TODO: handle pcre match here
+// Returns:
+//     1: string matched
+//     0: string didn't match
+//    -1: an error occurred (reason was printed to stderr)
+//
+int RegexMatch(const char*regex, const char *match) {
+    const char *regex_errorstr;		// returned error if any
+    int         regex_erroroff;		// offset in string where error occurred
+
+    // Compile the regex..
+    pcre *regex_compiled = pcre_compile(regex, 0, &regex_errorstr, &regex_erroroff, NULL);
+    if ( regex_compiled == NULL ) {
+        fprintf(stderr, "ERROR: could not compile regex '%s': %s\n", regex, regex_errorstr);
+        fprintf(stderr, "                               %*s^\n",     regex_erroroff, ""); // point to the error
+        fprintf(stderr, "                               %*sError here\n", regex_erroroff, "");
+	return -1;
+    }
+
+    // Optimize regex
+    pcre_extra *regex_extra = pcre_study(regex_compiled, 0, &regex_errorstr);
+    if ( regex_errorstr != NULL ) {
+        pcre_free(regex_compiled);  // don't leak compiled regex
+        fprintf(stderr, "ERROR: Could not study regex '%s': %s\n", regex, regex_errorstr);
+	return -1;
+    }
+
+    // Now see if we can match string
+    int *substrvec = NULL; // pcre_exec()'s captured substrings (NULL=disinterest)
+    int nsubstrvec = 0;    // number of elements in substrvec (0=disinterest)
+    int soff = 0;          // starting offset (0=start of string)
+    int opts = 0;          // pcre_exec()'s options (0=none)
+    int ret = pcre_exec(regex_compiled, regex_extra, match, strlen(match), soff, opts, substrvec, nsubstrvec);
+
+    // Free up compiled regex
+    pcre_free(regex_compiled);
+    pcre_free(regex_extra);
+
+    // Check match results..
+    if ( ret < 0 ) {
+	switch (ret) {
+	    case PCRE_ERROR_NOMATCH:
+                return 0;  // string didn't match
+	    default:
+                fprintf(stderr, "ERROR: bad regex '%s'\n", regex);
+                return -1;
+	}
+    }
+    return 1;   // string matched
 }
 
 class Configure {
     int maxsecs;                                    // maximum seconds program should run before stopping
     string domain;                                  // domain our server should know itself as (e.g. "example.com")
 
-    // XXX: use a map
     vector<string> allow_mail_to_shell_address;     // mail_to shell addresses we allow
     vector<string> allow_mail_to_shell_command;     // mail_to shell command to pipe mail to
 
-    // XXX: use a map
     vector<string> allow_mail_to_file_address;      // mail_to file addresses we allow
     vector<string> allow_mail_to_file_filename;     // mail_to file filename we append letters to
 
-    // XXX: use a map
     vector<string> replace_mail_to_regex;           // mail_to regex to search for
     vector<string> replace_mail_to_after;           // mail_to regex match replacement string
 
@@ -101,6 +147,9 @@ public:
             // Skip blank lines
             if ( line[0] == '\n' ) continue;
 
+            // Show each line loaded if debugging..
+            if ( G_debug) fprintf(stderr, "DEBUG: Loading config: %s", line);
+
             // Handle config commands..
             //
             //     Note: Our combo of fgets() and sscanf() with just %s is safe from overruns;
@@ -108,18 +157,33 @@ public:
             //
             if ( sscanf(line, "domain %s", arg1) == 1 ) {
                 domain = arg1;
-            } else if ( sscanf(line, "allow mail_to %s file %s", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "deliver mail_to %s append %s", arg1, arg2) == 2 ) {
                 allow_mail_to_file_address.push_back(arg1);
                 allow_mail_to_file_filename.push_back(arg2);
-            } else if ( sscanf(line, "allow mail_to %s shell %[^\n]", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "deliver mail_to %s shell %[^\n]", arg1, arg2) == 2 ) {
                 allow_mail_to_shell_address.push_back(arg1);
                 allow_mail_to_shell_command.push_back(arg2);
             } else if ( sscanf(line, "replace mail_to %s %s", arg1, arg2) == 2 ) {
+                // Make sure regex compiles..
+                if ( RegexMatch(arg1, "x") == -1 ) {
+                    fprintf(stderr, "ERROR: '%s' (LINE %d): bad replace mail_to regex '%s'\n", conffile, linenum, arg1);
+                    err = -1;
+                }
                 replace_mail_to_regex.push_back(arg1);
                 replace_mail_to_after.push_back(arg2);
             } else if ( sscanf(line, "allow remotehost %s", arg1) == 1 ) {
+                // Make sure regex compiles..
+                if ( RegexMatch(arg1, "x") == -1 ) {
+                    fprintf(stderr, "ERROR: '%s' (LINE %d): bad remotehost regex '%s'\n", conffile, linenum, arg1);
+                    err = -1;
+                }
                 allow_remotehost_regex.push_back(arg1);
             } else if ( sscanf(line, "allow remoteip %s", arg1) == 1 ) {
+                // Make sure regex compiles..
+                if ( RegexMatch(arg1, "x") == -1 ) {
+                    fprintf(stderr, "ERROR: '%s' (LINE %d): bad remoteip regex '%s'\n", conffile, linenum, arg1);
+                    err = -1;
+                }
                 allow_remoteip_regex.push_back(arg1);
             } else {
                 fprintf(stderr, "ERROR: '%s' (LINE %d): ignoring unknown config command: %s\n", conffile, linenum, line);
@@ -165,20 +229,36 @@ public:
         // Nothing configured? Allow anyone
         if ( allow_remotehost_regex.size() == 0 &&
              allow_remoteip_regex.size()   == 0 ) {
+            if ( G_debug) {
+                fprintf(stderr, "DEBUG: There are no checks configured for remotehost/remoteip"
+                                " (allowing anyone to connect)\n");
+            }
             return 0;
         }
 
         // If one or both configured, must have at least one match
 
         // See if remote hostname allowed to connect to us
-        for ( size_t t=0; t<allow_remotehost_regex.size(); t++ )
-            if ( RegexMatch(allow_remotehost_regex[t].c_str(), remotehost) )
+        for ( size_t t=0; t<allow_remotehost_regex.size(); t++ ) {
+            if ( G_debug) fprintf(stderr, "DEBUG: Checking '%s' against '%s'..\n",
+                                  allow_remotehost_regex[t].c_str(), remotehost);
+            if ( RegexMatch(allow_remotehost_regex[t].c_str(), remotehost) == 1 ) {
+                if ( G_debug) fprintf(stderr, "DEBUG:     Matched!\n");
                 return 0;   // match
+            }
+            if ( G_debug) fprintf(stderr, "DEBUG:     No match.\n");
+        }
 
         // Check if remote IP allowed to connect to us
-        for ( size_t t=0; t<allow_remoteip_regex.size(); t++ )
-            if ( RegexMatch(allow_remoteip_regex[t].c_str(), remoteip) )
+        for ( size_t t=0; t<allow_remoteip_regex.size(); t++ ) {
+            if ( G_debug) fprintf(stderr, "DEBUG: Checking '%s' against '%s'..\n",
+                                  allow_remoteip_regex[t].c_str(), remoteip);
+            if ( RegexMatch(allow_remoteip_regex[t].c_str(), remoteip) == 1 ) {
+                if ( G_debug) fprintf(stderr, "DEBUG:     Matched!\n");
                 return 0;   // match
+            }
+            if ( G_debug) fprintf(stderr, "DEBUG:     No match.\n");
+        }
 
         return -1;          // No match? Failed
     }
@@ -186,11 +266,8 @@ public:
 
 Configure G_conf;
 
-// TODO: MyLog() that logs date and remote IP
-
 // TODO: Put a timer on this entire program.
-//       Abort if we're running longer than e.g. 5 minutes.
-//
+//       Abort if we're running longer than G_config.MaxSecs()
 
 // Minimum commands we must support:
 //      HELO MAIL RCPT DATA RSET NOOP QUIT VRFY
@@ -435,7 +512,7 @@ int main(int argc, const char *argv[]) {
     if ( G_conf.CheckRemote(remotehost, remoteip) < 0 ) {
         printf("221 Cannot receive messages from %s [%s] at this time.\n", remotehost, remoteip);
         fflush(stdout);
-        fprintf(stderr, "DENIED: Connection from %s [%s] not in allow_remote* lists\n", remotehost, remoteip);
+        fprintf(stderr, "DENIED: Connection from %s [%s] not in allow_remotehost/ip lists\n", remotehost, remoteip);
         return 1;
     }
 

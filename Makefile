@@ -2,7 +2,7 @@ VERSION=1.00
 SHELL=/bin/sh
 
 mailrecv: mailrecv.C
-	g++ -DVERSION=\"$(VERSION)\" mailrecv.C -o mailrecv
+	g++ -DVERSION=\"$(VERSION)\" mailrecv.C -o mailrecv -l pcre
 
 clean: FORCE
 	if [ -e mailrecv ]; then rm -f mailrecv; fi
