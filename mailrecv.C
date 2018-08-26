@@ -1,3 +1,5 @@
+// vim: autoindent tabstop=8 shiftwidth=4 expandtab softtabstop=4
+
 //
 // mailrecv.C -- xinetd tool to act as a simple SMTP server
 //
@@ -42,16 +44,8 @@ using namespace std;
 //       Abort if we're running longer than e.g. 5 minutes.
 //
 
-// Commands we must support:
-//      HELO
-//      MAIL
-//      RCPT
-//      DATA
-//      RSET
-//      NOOP
-//      QUIT
-//      VRFY    -- (we just say OK but do no checks)
-//
+// Minimum commands we must support:
+//      HELO MAIL RCPT DATA RSET NOOP QUIT VRFY
 
 // RETURN REMOTE'S IP ADDRESS
 //    fp -- tcp connection as a FILE* (e.g. as xinetd would hand to us)
@@ -73,6 +67,9 @@ int GetRemoteIPAddr(FILE *fp, char *s, int maxlen) {
 }
 
 // RETURN REMOTE'S HOSTNAME
+//    fp -- tcp connection as a FILE* (e.g. as xinetd would hand to us)
+//    s  -- returned hostname
+//
 int GetRemoteHostname(FILE *fp, char *s, int maxlen) {
     GetRemoteIPAddr(fp, s, maxlen);             // TODO: Use getnameinfo(3)
 }
@@ -169,7 +166,8 @@ int main() {
             } else {
                 printf("501 Unknown argument '%s'%s", arg1, CRLF);
                 fflush(stdout);
-                fprintf(stderr, "%s [%s] ERROR: unknown MAIL argument '%s'", remotehost, remoteip, arg1);
+                fprintf(stderr, "%s [%s] ERROR: unknown MAIL argument '%s'",
+		    remotehost, remoteip, arg1);
             }
         } else if ( ISIT("RCPT") ) {
             if ( ISARG1("TO:") ) {
@@ -178,7 +176,8 @@ int main() {
                 printf("250 %s... recipient ok%s", rcpt_to, CRLF);
             } else {
                 printf("501 Unknown argument '%s'%s", arg1, CRLF);
-                fprintf(stderr, "%s [%s] ERROR: unknown RCPT argument '%s'", remotehost, remoteip, arg1);
+                fprintf(stderr, "%s [%s] ERROR: unknown RCPT argument '%s'",
+		    remotehost, remoteip, arg1);
             }
         } else if ( ISIT("DATA") ) {
             if ( rcpt_to[0] == 0 ) {
@@ -189,7 +188,8 @@ int main() {
                 printf("354 Start mail input; end with <CRLF>.<CRLF>%s", CRLF);
                 fflush(stdout);
                 if ( ReadLetter(stdin, letter) == -1 ) {
-                    fprintf(stderr, "%s %s: Premature end of input for DATA command\n", remotehost, remoteip);
+                    fprintf(stderr, "%s %s: Premature end of input for DATA command\n",
+		        remotehost, remoteip);
                     break;              // break fgets() loop
                 }
 		if ( letter.size() < 3 ) {
@@ -218,10 +218,12 @@ int main() {
                     ISIT("SAML") || ISIT("TURN") ) {
             // COMMANDS WE DONT SUPPORT
             printf("502 Command not implemented or disabled%s", CRLF);
-            fprintf(stderr, "%s [%s] ERROR: Remote tried '%s', we don't support it\n", remotehost, remoteip, cmd);
+            fprintf(stderr, "%s [%s] ERROR: Remote tried '%s', we don't support it\n",
+	        remotehost, remoteip, cmd);
         } else {
             printf("500 Unknown command%s", CRLF);
-            fprintf(stderr, "%s [%s] ERROR: Remote tried '%s', unknown command\n", remotehost, remoteip, cmd);
+            fprintf(stderr, "%s [%s] ERROR: Remote tried '%s', unknown command\n",
+	        remotehost, remoteip, cmd);
         }
 
         // All commands end up here, successful or not
