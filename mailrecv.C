@@ -121,10 +121,12 @@ int DeliverMail(const char* mail_from,
 
 int main() {
 
+    // TODO: parse command line, e.g. -version to print VERSION macro string
+
     // Get the remote IP address for stdin
-    char remoteip[80];
+    char remoteip[LINE_LEN+1];
     char remotehost[LINE_LEN+1];
-    GetRemoteIPAddr(stdin, remoteip, 79);
+    GetRemoteIPAddr(stdin, remoteip, LINE_LEN);
     GetRemoteHostname(stdin, remotehost, LINE_LEN);
 
     const char *mydomain = MYDOMAIN;
