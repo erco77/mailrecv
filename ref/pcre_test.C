@@ -53,5 +53,12 @@ int main() {
     } else {
         printf("YES *UNEXPECTED*\n");
     }
+
+    // Free up the compiled regular expression.
+    pcre_free(regex_compiled);
+
+    // Free up the extra pcre
+    pcre_free(regex_extra);
+
     return(0);
 }

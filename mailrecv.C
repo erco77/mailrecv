@@ -25,7 +25,9 @@
 // 80 //////////////////////////////////////////////////////////////////////////
 
 #include <stdio.h>
-#include <string.h>     // strchr()
+#include <string.h>     // strchr(), strerror()
+#include <errno.h>      // errno
+#include <stdlib.h>     // exit()
 #include <sys/socket.h> // getpeername()
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -34,9 +36,155 @@
 
 using namespace std;
 
-#define MYDOMAIN        "example.org"
 #define LINE_LEN        4096
 #define CRLF            "\r\n"
+#define CONFIG_FILE     "/etc/mailrecv.conf"
+
+int G_debug = 0;
+
+// Do a regular expression match test
+//     Returns 0 on match, -1 on no match
+//
+int RegexMatch(const char*regex, const char *str) {
+    return 1;               // TODO: handle pcre match here
+}
+
+class Configure {
+    int maxsecs;                                    // maximum seconds program should run before stopping
+    string domain;                                  // domain our server should know itself as (e.g. "example.com")
+
+    // XXX: use a map
+    vector<string> allow_mail_to_shell_address;     // mail_to shell addresses we allow
+    vector<string> allow_mail_to_shell_command;     // mail_to shell command to pipe mail to
+
+    // XXX: use a map
+    vector<string> allow_mail_to_file_address;      // mail_to file addresses we allow
+    vector<string> allow_mail_to_file_filename;     // mail_to file filename we append letters to
+
+    // XXX: use a map
+    vector<string> replace_mail_to_regex;           // mail_to regex to search for
+    vector<string> replace_mail_to_after;           // mail_to regex match replacement string
+
+    vector<string> allow_remotehost_regex;          // allowed remotehost name regex
+    vector<string> allow_remoteip_regex;            // allowed remoteip address regex
+
+public:
+    Configure() {
+        maxsecs = 300;
+        domain  = "example.com";
+    }
+
+    // Accessors
+    int MaxSecs() const { return maxsecs; }
+    const char *Domain() const { return domain.c_str(); }
+
+    // Load the specified config file
+    //     Returns 0 on success, -1 on error (reason printed on stderr)
+    //
+    int Load(const char *conffile) {
+        int err = 0;
+        FILE *fp;
+        if ( (fp = fopen(conffile, "r")) == NULL) {
+            fprintf(stderr, "mailrecv: can't open %s: %s\n", conffile, strerror(errno));
+            return -1;
+        }
+        char line[LINE_LEN+1], arg1[LINE_LEN+1], arg2[LINE_LEN+1];
+        int linenum = 0;
+        while ( fgets(line, LINE_LEN, fp) != NULL ) {
+            // Keep count of lines
+            ++linenum;
+
+            // Strip comments, but keep trailing \n
+            char *p = strchr(line,'#');
+            if ( p ) { *p = 0; strcat(line, "\n"); }
+
+            // Skip blank lines
+            if ( line[0] == '\n' ) continue;
+
+            // Handle config commands..
+            //
+            //     Note: Our combo of fgets() and sscanf() with just %s is safe from overruns;
+            //     line[] is limited to LINE_LEN by fgets(), so arg1/arg2 must be shorter.
+            //
+            if ( sscanf(line, "domain %s", arg1) == 1 ) {
+                domain = arg1;
+            } else if ( sscanf(line, "allow mail_to %s file %s", arg1, arg2) == 2 ) {
+                allow_mail_to_file_address.push_back(arg1);
+                allow_mail_to_file_filename.push_back(arg2);
+            } else if ( sscanf(line, "allow mail_to %s shell %[^\n]", arg1, arg2) == 2 ) {
+                allow_mail_to_shell_address.push_back(arg1);
+                allow_mail_to_shell_command.push_back(arg2);
+            } else if ( sscanf(line, "replace mail_to %s %s", arg1, arg2) == 2 ) {
+                replace_mail_to_regex.push_back(arg1);
+                replace_mail_to_after.push_back(arg2);
+            } else if ( sscanf(line, "allow remotehost %s", arg1) == 1 ) {
+                allow_remotehost_regex.push_back(arg1);
+            } else if ( sscanf(line, "allow remoteip %s", arg1) == 1 ) {
+                allow_remoteip_regex.push_back(arg1);
+            } else {
+                fprintf(stderr, "ERROR: '%s' (LINE %d): ignoring unknown config command: %s\n", conffile, linenum, line);
+                err = -1;
+            }
+        }
+        fclose(fp);
+
+        // Debugging enabled via command line?
+        //     Show what we loaded..
+        //
+        if ( G_debug ) {
+            fprintf(stderr, "--- Config file:\n");
+            fprintf(stderr, "    maxsecs: %d\n", MaxSecs());
+            fprintf(stderr, "    domain: '%s'\n", Domain());
+            size_t t;
+            for ( t=0; t<allow_mail_to_file_address.size(); t++ ) {
+                fprintf(stderr, "    allow mail_to: address='%s', which writes to file='%s'\n",
+                    allow_mail_to_file_address[t].c_str(),
+                    allow_mail_to_file_filename[t].c_str());
+            }
+            for ( t=0; t<allow_mail_to_shell_address.size(); t++ ) {
+                fprintf(stderr, "    allow mail_to: address='%s', which pipes to cmd='%s'\n",
+                    allow_mail_to_shell_address[t].c_str(),
+                    allow_mail_to_shell_command[t].c_str());
+            }
+            for ( t=0; t<allow_remotehost_regex.size(); t++ ) {
+                fprintf(stderr, "    allow remote hostnames that match perl regex '%s'\n", allow_remotehost_regex[t].c_str());
+            }
+            for ( t=0; t<allow_remoteip_regex.size(); t++ ) {
+                fprintf(stderr, "    allow remote IP addresses that match perl regex '%s'\n", allow_remoteip_regex[t].c_str());
+            }
+            fprintf(stderr, "---\n");
+        }
+        return err;     // let caller decide what to do
+    }
+
+    // See if remotehost/remoteip are allowed to connect to us
+    //     Checks if any 'allow remotehost/remoteip ..' commands were configured,
+    //     and if so, do match checks.
+    //
+    int CheckRemote(const char *remotehost, const char *remoteip) {
+        // Nothing configured? Allow anyone
+        if ( allow_remotehost_regex.size() == 0 &&
+             allow_remoteip_regex.size()   == 0 ) {
+            return 0;
+        }
+
+        // If one or both configured, must have at least one match
+
+        // See if remote hostname allowed to connect to us
+        for ( size_t t=0; t<allow_remotehost_regex.size(); t++ )
+            if ( RegexMatch(allow_remotehost_regex[t].c_str(), remotehost) )
+                return 0;   // match
+
+        // Check if remote IP allowed to connect to us
+        for ( size_t t=0; t<allow_remoteip_regex.size(); t++ )
+            if ( RegexMatch(allow_remoteip_regex[t].c_str(), remoteip) )
+                return 0;   // match
+
+        return -1;          // No match? Failed
+    }
+};
+
+Configure G_conf;
 
 // TODO: MyLog() that logs date and remote IP
 
@@ -81,7 +229,7 @@ void StripCRLF(char *s) {
     if ( (eol = strchr(s, '\n')) ) { *eol = 0; }
 }
 
-#define ISIT(x)         !strcasecmp(cmd, x)
+#define ISCMD(x)         !strcasecmp(cmd, x)
 #define ISARG1(x)       !strcasecmp(arg1, x)
 
 // READ LETTER'S DATA FROM THE REMOTE
@@ -94,9 +242,8 @@ int ReadLetter(FILE *fp, vector<string>& letter) {
         StripCRLF(s);
         fprintf(stderr, "LETTER: '%s'\n", s);
         // End of letter? done
-        if ( strcmp(s, ".") == 0 ) {
-            return 0;
-        }
+        if ( strcmp(s, ".") == 0 ) return 0;
+        // Otherwise append lines with CRLF removed to letter
         letter.push_back(s);
     }
     return -1;                  // premature end of input
@@ -116,18 +263,8 @@ int DeliverMail(const char* mail_from,
     return 0;
 }
 
-int main() {
-
-    // TODO: parse command line, e.g. -version to print VERSION macro string
-
-    // Get the remote IP address for stdin
-    char remoteip[LINE_LEN+1];
-    char remotehost[LINE_LEN+1];
-    GetRemoteIPAddr(stdin, remoteip, LINE_LEN);
-    GetRemoteHostname(stdin, remotehost, LINE_LEN);
-
-    const char *mydomain = MYDOMAIN;
-
+// Handle a complete SMTP session with the remote on stdin/stdout
+int HandleSMTP(const char *remotehost, const char *remoteip) {
     vector<string> letter;
     char s[LINE_LEN+1],                 // raw line buffer
          cmd[LINE_LEN+1],               // cmd received
@@ -135,9 +272,10 @@ int main() {
          arg2[LINE_LEN+1],              // arg2 received
          mail_from[LINE_LEN+1],         // The remote's "MAIL FROM:" value
          rcpt_to[LINE_LEN+1];           // The remote's "RCPT TO:" value
+    const char *domain = G_conf.Domain();
 
     // WE IMPLEMENT RFC 822 HELO PROTOCOL ONLY
-    printf("220 %s SMTP (RFC 822) mailrecv\n", mydomain);
+    printf("220 %s SMTP (RFC 822) mailrecv\n", domain);
 
     int quit = 0;
     while (!quit && fgets(s, LINE_LEN-1, stdin)) {
@@ -151,14 +289,14 @@ int main() {
         arg1[LINE_LEN] = 0;     // extra caution
         arg2[LINE_LEN] = 0;
 
-        if ( ISIT("QUIT") ) {
+        if ( ISCMD("QUIT") ) {
             quit = 1;
-            printf("221 %s closing connection%s", mydomain, CRLF);
+            printf("221 %s closing connection%s", domain, CRLF);
             fflush(stdout);
-        } else if ( ISIT("HELO") ) {
-            printf("250 %s Hello %s [%s]%s", mydomain, remotehost, remoteip, CRLF);
+        } else if ( ISCMD("HELO") ) {
+            printf("250 %s Hello %s [%s]%s", domain, remotehost, remoteip, CRLF);
             fflush(stdout);
-        } else if ( ISIT("MAIL") ) {
+        } else if ( ISCMD("MAIL") ) {
             if ( ISARG1("FROM:")) {
                 strcpy(mail_from, arg2);
                 printf("250 '%s': Sender ok%s", mail_from, CRLF);
@@ -169,7 +307,7 @@ int main() {
                 fprintf(stderr, "%s [%s] ERROR: unknown MAIL argument '%s'",
 		    remotehost, remoteip, arg1);
             }
-        } else if ( ISIT("RCPT") ) {
+        } else if ( ISCMD("RCPT") ) {
             if ( ISARG1("TO:") ) {
                 strcpy(rcpt_to, arg2);
                 // TODO: If recipient fails, return "550 unknown local user"
@@ -179,7 +317,7 @@ int main() {
                 fprintf(stderr, "%s [%s] ERROR: unknown RCPT argument '%s'",
 		    remotehost, remoteip, arg1);
             }
-        } else if ( ISIT("DATA") ) {
+        } else if ( ISCMD("DATA") ) {
             if ( rcpt_to[0] == 0 ) {
                 printf("503 Bad sequence of commands -- missing RCPT TO%s", CRLF);
             } else if ( mail_from[0] == 0 ) {
@@ -201,21 +339,21 @@ int main() {
 		    DeliverMail(mail_from, rcpt_to, letter);
 		}
             }
-        } else if ( ISIT("RSET") ) {
+        } else if ( ISCMD("RSET") ) {
             mail_from[0] = 0;
             rcpt_to[0] = 0;
             letter.clear();
             printf("250 OK%s", CRLF);
-        } else if ( ISIT("NOOP") ) {
+        } else if ( ISCMD("NOOP") ) {
             printf("250 OK%s", CRLF);
-        } else if ( ISIT("HELP") ) {
+        } else if ( ISCMD("HELP") ) {
             printf("214 Help:%s", CRLF);
             printf("    HELO, DATA, RSET, NOOP, QUIT,%s", CRLF);
             printf("    MAIL FROM:,  RCPT TO:,%s", CRLF);
             printf("    VRFY, EXPN, EHLO, SEND, SOML, SAML, TURN%s", CRLF);
-        } else if ( ISIT("VRFY") || ISIT("EXPN") ||
-                    ISIT("SEND") || ISIT("SOML") ||
-                    ISIT("SAML") || ISIT("TURN") ) {
+        } else if ( ISCMD("VRFY") || ISCMD("EXPN") ||
+                    ISCMD("SEND") || ISCMD("SOML") ||
+                    ISCMD("SAML") || ISCMD("TURN") ) {
             // COMMANDS WE DONT SUPPORT
             printf("502 Command not implemented or disabled%s", CRLF);
             fprintf(stderr, "%s [%s] ERROR: Remote tried '%s', we don't support it\n",
@@ -241,4 +379,66 @@ int main() {
             remotehost, remoteip);
         return 1;               // indicate an error occurred
     }
+}
+
+// Show help and exit
+void HelpAndExit() {
+    fputs("mailrecv - a simple SMTP xinetd daemon (V " VERSION ")\n"
+          "        See LICENSE file packaged with newsd for license/copyright info.\n"
+          "\n"
+	  "Options\n"
+	  "    -c config-file     -- use 'config-file' instead of default (" CONFIG_FILE ")\n"
+	  "    -d                 -- enable debugging messages on stderr\n"
+	  "\n",
+          stderr);
+    exit(1);
+}
+
+int main(int argc, const char *argv[]) {
+    // Initial config file
+    const char *conffile = CONFIG_FILE;
+
+    // Parse command line, possibly override default conffile, etc.
+    for (int t=1; t<argc; t++) {
+        if (strcmp(argv[t], "-c") == 0) {
+	    if (++t >= argc) {
+	        fprintf(stderr, "mailrecv: ERROR: expected filename after '-c'\n");
+                return 1;
+	    }
+            conffile = argv[t];
+	}
+	else if (strcmp(argv[t], "-d") == 0) {
+            G_debug = 1;
+        } else if (strncmp(argv[t], "-h", 2) == 0) {
+	    HelpAndExit();
+        } else {
+	    fprintf(stderr, "mailrecv: ERROR: unknown argument '%s'\n", argv[t]);
+            HelpAndExit();
+        }
+    }
+
+    // Load config file
+    if ( G_conf.Load(conffile) < 0 ) {
+        // Tell remote we can't receive SMTP at this time
+        printf("221 Cannot receive messages at this time.\n");
+        fflush(stdout);
+        return 1;       // fail
+    }
+
+    // Get the remote IP address for stdin
+    char remoteip[LINE_LEN+1];
+    char remotehost[LINE_LEN+1];
+    GetRemoteIPAddr(stdin, remoteip, LINE_LEN);
+    GetRemoteHostname(stdin, remotehost, LINE_LEN);
+    
+    // Check if remote allowed to connect to us
+    if ( G_conf.CheckRemote(remotehost, remoteip) < 0 ) {
+        printf("221 Cannot receive messages from %s [%s] at this time.\n", remotehost, remoteip);
+        fflush(stdout);
+        fprintf(stderr, "DENIED: Connection from %s [%s] not in allow_remote* lists\n", remotehost, remoteip);
+        return 1;
+    }
+
+    // Handle the SMTP session with the remote
+    return HandleSMTP(remotehost, remoteip);
 }
