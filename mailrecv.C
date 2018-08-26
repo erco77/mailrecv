@@ -98,18 +98,57 @@ int RegexMatch(const char*regex, const char *match) {
     return 1;   // string matched
 }
 
+// Append letter to specified file
+int AppendMailToFile(const char *mail_from,
+                     const char *rcpt_to,
+                     const vector<string>& letter,
+                     const string& filename) {
+    FILE *fp;
+    if ( (fp = fopen(filename.c_str(), "a")) == NULL) {
+        fprintf(stderr, "mailrecv: ERROR: can't append to %s: %s\n", filename.c_str(), strerror(errno));
+        return -1;  // fail
+    }
+    fprintf(fp, "From %s\n", mail_from);
+    for ( size_t t=0; t<letter.size(); t++ ) {
+        fprintf(fp, "%s\n", letter[t].c_str());
+    }
+    fclose(fp);
+    return 1;       // success
+}
+
+// Pipe letter to specified shell command
+int PipeMailToCommand(const char *mail_from,
+                      const char *rcpt_to,
+                      const vector<string>& letter,
+                      const string& command) {
+    FILE *fp;
+    if ( (fp = popen(command.c_str(), "w")) == NULL) {
+        fprintf(stderr, "mailrecv: ERROR: can't popen(%s): %s\n", command.c_str(), strerror(errno));
+        return -1;  // fail
+    }
+    fprintf(fp, "From %s\n", mail_from);
+    for ( size_t t=0; t<letter.size(); t++ ) {
+        fprintf(fp, "%s\n", letter[t].c_str());
+    }
+    pclose(fp);
+    return 1;       // success
+}
+
+// mailrecv's configuration file class
 class Configure {
     int maxsecs;                                    // maximum seconds program should run before stopping
     string domain;                                  // domain our server should know itself as (e.g. "example.com")
+                                                    // and accept mail for.
+    string deadletter_file;                         // file to append messages to that have no 'deliver'
 
-    vector<string> allow_mail_to_shell_address;     // mail_to shell addresses we allow
-    vector<string> allow_mail_to_shell_command;     // mail_to shell command to pipe mail to
+    vector<string> deliver_rcpt_to_shell_address;   // configured rcpt_to addresses to pipe to a shell command
+    vector<string> deliver_rcpt_to_shell_command;   // rcpt_to shell command to pipe matching mail to address
 
-    vector<string> allow_mail_to_file_address;      // mail_to file addresses we allow
-    vector<string> allow_mail_to_file_filename;     // mail_to file filename we append letters to
+    vector<string> deliver_rcpt_to_file_address;    // rcpt_to file addresses we allow
+    vector<string> deliver_rcpt_to_file_filename;   // rcpt_to file filename we append letters to
 
-    vector<string> replace_mail_to_regex;           // mail_to regex to search for
-    vector<string> replace_mail_to_after;           // mail_to regex match replacement string
+    vector<string> replace_rcpt_to_regex;           // rcpt_to regex to search for
+    vector<string> replace_rcpt_to_after;           // rcpt_to regex match replacement string
 
     vector<string> allow_remotehost_regex;          // allowed remotehost name regex
     vector<string> allow_remoteip_regex;            // allowed remoteip address regex
@@ -118,11 +157,13 @@ public:
     Configure() {
         maxsecs = 300;
         domain  = "example.com";
+        deadletter_file = "/dev/null";              // must be "something"
     }
 
     // Accessors
     int MaxSecs() const { return maxsecs; }
     const char *Domain() const { return domain.c_str(); }
+    const char *DeadLetterFile() const { return deadletter_file.c_str(); }
 
     // Load the specified config file
     //     Returns 0 on success, -1 on error (reason printed on stderr)
@@ -157,20 +198,22 @@ public:
             //
             if ( sscanf(line, "domain %s", arg1) == 1 ) {
                 domain = arg1;
-            } else if ( sscanf(line, "deliver mail_to %s append %s", arg1, arg2) == 2 ) {
-                allow_mail_to_file_address.push_back(arg1);
-                allow_mail_to_file_filename.push_back(arg2);
-            } else if ( sscanf(line, "deliver mail_to %s shell %[^\n]", arg1, arg2) == 2 ) {
-                allow_mail_to_shell_address.push_back(arg1);
-                allow_mail_to_shell_command.push_back(arg2);
-            } else if ( sscanf(line, "replace mail_to %s %s", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "deadletter_file %s", arg1) == 1 ) {
+                deadletter_file = arg1;
+            } else if ( sscanf(line, "deliver rcpt_to %s append %s", arg1, arg2) == 2 ) {
+                deliver_rcpt_to_file_address.push_back(arg1);
+                deliver_rcpt_to_file_filename.push_back(arg2);
+            } else if ( sscanf(line, "deliver rcpt_to %s shell %[^\n]", arg1, arg2) == 2 ) {
+                deliver_rcpt_to_shell_address.push_back(arg1);
+                deliver_rcpt_to_shell_command.push_back(arg2);
+            } else if ( sscanf(line, "replace rcpt_to %s %s", arg1, arg2) == 2 ) {
                 // Make sure regex compiles..
                 if ( RegexMatch(arg1, "x") == -1 ) {
-                    fprintf(stderr, "ERROR: '%s' (LINE %d): bad replace mail_to regex '%s'\n", conffile, linenum, arg1);
+                    fprintf(stderr, "ERROR: '%s' (LINE %d): bad replace rcpt_to regex '%s'\n", conffile, linenum, arg1);
                     err = -1;
                 }
-                replace_mail_to_regex.push_back(arg1);
-                replace_mail_to_after.push_back(arg2);
+                replace_rcpt_to_regex.push_back(arg1);
+                replace_rcpt_to_after.push_back(arg2);
             } else if ( sscanf(line, "allow remotehost %s", arg1) == 1 ) {
                 // Make sure regex compiles..
                 if ( RegexMatch(arg1, "x") == -1 ) {
@@ -199,16 +242,17 @@ public:
             fprintf(stderr, "--- Config file:\n");
             fprintf(stderr, "    maxsecs: %d\n", MaxSecs());
             fprintf(stderr, "    domain: '%s'\n", Domain());
+            fprintf(stderr, "    deadletter_file: '%s'\n", DeadLetterFile());
             size_t t;
-            for ( t=0; t<allow_mail_to_file_address.size(); t++ ) {
-                fprintf(stderr, "    allow mail_to: address='%s', which writes to file='%s'\n",
-                    allow_mail_to_file_address[t].c_str(),
-                    allow_mail_to_file_filename[t].c_str());
+            for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
+                fprintf(stderr, "    deliver rcpt_to: address='%s', which writes to file='%s'\n",
+                    deliver_rcpt_to_file_address[t].c_str(),
+                    deliver_rcpt_to_file_filename[t].c_str());
             }
-            for ( t=0; t<allow_mail_to_shell_address.size(); t++ ) {
-                fprintf(stderr, "    allow mail_to: address='%s', which pipes to cmd='%s'\n",
-                    allow_mail_to_shell_address[t].c_str(),
-                    allow_mail_to_shell_command[t].c_str());
+            for ( t=0; t<deliver_rcpt_to_shell_address.size(); t++ ) {
+                fprintf(stderr, "    deliver rcpt_to: address='%s', which pipes to cmd='%s'\n",
+                    deliver_rcpt_to_shell_address[t].c_str(),
+                    deliver_rcpt_to_shell_command[t].c_str());
             }
             for ( t=0; t<allow_remotehost_regex.size(); t++ ) {
                 fprintf(stderr, "    allow remote hostnames that match perl regex '%s'\n", allow_remotehost_regex[t].c_str());
@@ -262,6 +306,35 @@ public:
 
         return -1;          // No match? Failed
     }
+
+    // Deliver mail to recipient.
+    //     If there's no configured recipient, write to deadletter file.
+    //     Returns 1 on success, -1 on error (reason printed to stderr).
+    //
+    int DeliverMail(const char* mail_from,
+                    const char *rcpt_to,
+                    const vector<string>& letter) {
+        size_t t;
+
+        // Check for 'append to file' recipient..
+        for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
+            if ( strcmp(rcpt_to, deliver_rcpt_to_file_address[t].c_str()) == 0 ) {
+                AppendMailToFile(mail_from, rcpt_to, letter, deliver_rcpt_to_file_filename[t]);
+                return 1;   // delivered
+            }
+        }
+        // Check for 'pipe to command' recipient..
+        for ( t=0; t<deliver_rcpt_to_shell_address.size(); t++ ) {
+            if ( strcmp(rcpt_to, deliver_rcpt_to_shell_address[t].c_str()) == 0 ) {
+                PipeMailToCommand(mail_from, rcpt_to, letter, deliver_rcpt_to_shell_command[t]);
+                return 1;   // delivered
+            }
+        }
+        // If we're here, nothing matched.. write to deadletter file
+        AppendMailToFile(mail_from, rcpt_to, letter, deadletter_file);
+        return 1;   // delivered
+    }
+
 };
 
 Configure G_conf;
@@ -326,24 +399,10 @@ int ReadLetter(FILE *fp, vector<string>& letter) {
     return -1;                  // premature end of input
 }
 
-// TODO: Check recipient, write to file or pipe
-int DeliverMail(const char* mail_from,
-                const char *rcpt_to,
-                const vector<string>& letter) {
-    fprintf(stderr, "MAIL FROM: %s\n", mail_from);
-    fprintf(stderr, "RCPT TO: %s\n", rcpt_to);
-    fprintf(stderr, "--- LETTER: START\n");
-    for ( size_t i=0; i<letter.size(); i++ ) {
-        fprintf(stderr, "%s\n", letter[i].c_str());
-    }
-    fprintf(stderr, "--- LETTER: END\n");
-    return 0;
-}
-
 // Handle a complete SMTP session with the remote on stdin/stdout
 int HandleSMTP(const char *remotehost, const char *remoteip) {
     vector<string> letter;
-    char s[LINE_LEN+1],                 // raw line buffer
+    char line[LINE_LEN+1],              // raw line buffer
          cmd[LINE_LEN+1],               // cmd received
          arg1[LINE_LEN+1],              // arg1 received
          arg2[LINE_LEN+1],              // arg2 received
@@ -355,14 +414,15 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
     printf("220 %s SMTP (RFC 822) mailrecv\n", domain);
 
     int quit = 0;
-    while (!quit && fgets(s, LINE_LEN-1, stdin)) {
-        s[LINE_LEN] = 0;        // extra caution
-        StripCRLF(s);
-        fprintf(stderr, "%s [%s] GOT: '%s'\n", remotehost, remoteip, s);
+    while (!quit && fgets(line, LINE_LEN-1, stdin)) {
+        line[LINE_LEN] = 0;        // extra caution
+        StripCRLF(line);
+        if ( G_debug ) 
+            fprintf(stderr, "DEBUG: SMTP from %s [%s]: %s\n", remotehost, remoteip, line);
 
         // Break up command into args
         arg1[0] = arg2[0] = 0;
-        if ( sscanf(s, "%s%s%s", cmd, arg1, arg2) < 1 ) continue;
+        if ( sscanf(line, "%s%s%s", cmd, arg1, arg2) < 1 ) continue;
         arg1[LINE_LEN] = 0;     // extra caution
         arg2[LINE_LEN] = 0;
 
@@ -413,7 +473,7 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
 		} else {
 		    // Handle mail delivery
 		    printf("250 Message accepted for delivery%s", CRLF);
-		    DeliverMail(mail_from, rcpt_to, letter);
+		    G_conf.DeliverMail(mail_from, rcpt_to, letter);
 		}
             }
         } else if ( ISCMD("RSET") ) {
@@ -431,7 +491,7 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
         } else if ( ISCMD("VRFY") || ISCMD("EXPN") ||
                     ISCMD("SEND") || ISCMD("SOML") ||
                     ISCMD("SAML") || ISCMD("TURN") ) {
-            // COMMANDS WE DONT SUPPORT
+            // COMMANDS WE DON'T SUPPORT
             printf("502 Command not implemented or disabled%s", CRLF);
             fprintf(stderr, "%s [%s] ERROR: Remote tried '%s', we don't support it\n",
 	        remotehost, remoteip, cmd);
@@ -472,6 +532,10 @@ void HelpAndExit() {
 }
 
 int main(int argc, const char *argv[]) {
+
+    // Force bourne shell for popen(command)..
+    setenv("SHELL", "/bin/sh", 1);
+
     // Initial config file
     const char *conffile = CONFIG_FILE;
 
@@ -499,6 +563,7 @@ int main(int argc, const char *argv[]) {
         // Tell remote we can't receive SMTP at this time
         printf("221 Cannot receive messages at this time.\n");
         fflush(stdout);
+        fprintf(stderr, "mailrecv: ERROR: config file has errors (see above)\n");
         return 1;       // fail
     }
 
