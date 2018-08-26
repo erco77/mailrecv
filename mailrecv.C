@@ -34,7 +34,7 @@
 
 using namespace std;
 
-#define MYDOMAIN        "fltk.org"
+#define MYDOMAIN        "example.org"
 #define LINE_LEN        4096
 #define CRLF            "\r\n"
 

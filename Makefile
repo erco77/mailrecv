@@ -6,6 +6,7 @@ mailrecv: mailrecv.C
 
 clean: FORCE
 	if [ -e mailrecv ]; then rm -f mailrecv; fi
+	( cd ref; make clean )
 
 # GIT OPERATIONS
 commit: FORCE
