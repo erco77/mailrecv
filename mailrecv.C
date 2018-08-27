@@ -28,6 +28,8 @@
 #include <string.h>     // strchr(), strerror()
 #include <errno.h>      // errno
 #include <stdlib.h>     // exit()
+#include <stdarg.h>     // vargs
+#include <syslog.h>     // syslog()
 #include <pcre.h>       // perl regular expressions API (see 'man pcreapi(3)')
 #include <sys/socket.h> // getpeername()
 #include <netinet/in.h>
@@ -42,6 +44,20 @@ using namespace std;
 #define CONFIG_FILE     "/etc/mailrecv.conf"
 
 int G_debug = 0;
+
+// Log a message...
+void Log(const char *msg, ...) {
+    // Format the message...
+    va_list      ap;			// Argument list pointer
+    char         buffer[1024];		// Message buffer
+    unsigned int bytes;			// Size of message
+
+    va_start(ap, msg);
+    bytes = vsnprintf(buffer, sizeof(buffer), msg, ap);
+    va_end(ap);
+
+    syslog(LOG_ERR, "%s", buffer);
+}
 
 // Do a regular expression match test
 // 
@@ -60,9 +76,9 @@ int RegexMatch(const char*regex, const char *match) {
     // Compile the regex..
     pcre *regex_compiled = pcre_compile(regex, 0, &regex_errorstr, &regex_erroroff, NULL);
     if ( regex_compiled == NULL ) {
-        fprintf(stderr, "ERROR: could not compile regex '%s': %s\n", regex, regex_errorstr);
-        fprintf(stderr, "                               %*s^\n",     regex_erroroff, ""); // point to the error
-        fprintf(stderr, "                               %*sError here\n", regex_erroroff, "");
+        Log("ERROR: could not compile regex '%s': %s\n", regex, regex_errorstr);
+        Log("                               %*s^\n",     regex_erroroff, ""); // point to the error
+        Log("                               %*sError here\n", regex_erroroff, "");
 	return -1;
     }
 
@@ -70,7 +86,7 @@ int RegexMatch(const char*regex, const char *match) {
     pcre_extra *regex_extra = pcre_study(regex_compiled, 0, &regex_errorstr);
     if ( regex_errorstr != NULL ) {
         pcre_free(regex_compiled);  // don't leak compiled regex
-        fprintf(stderr, "ERROR: Could not study regex '%s': %s\n", regex, regex_errorstr);
+        Log("ERROR: Could not study regex '%s': %s\n", regex, regex_errorstr);
 	return -1;
     }
 
@@ -91,7 +107,7 @@ int RegexMatch(const char*regex, const char *match) {
 	    case PCRE_ERROR_NOMATCH:
                 return 0;  // string didn't match
 	    default:
-                fprintf(stderr, "ERROR: bad regex '%s'\n", regex);
+                Log("ERROR: bad regex '%s'\n", regex);
                 return -1;
 	}
     }
@@ -105,7 +121,7 @@ int AppendMailToFile(const char *mail_from,
                      const string& filename) {
     FILE *fp;
     if ( (fp = fopen(filename.c_str(), "a")) == NULL) {
-        fprintf(stderr, "mailrecv: ERROR: can't append to %s: %s\n", filename.c_str(), strerror(errno));
+        Log("ERROR: can't append to %s: %s\n", filename.c_str(), strerror(errno));
         return -1;  // fail
     }
     fprintf(fp, "From %s\n", mail_from);
@@ -123,7 +139,7 @@ int PipeMailToCommand(const char *mail_from,
                       const string& command) {
     FILE *fp;
     if ( (fp = popen(command.c_str(), "w")) == NULL) {
-        fprintf(stderr, "mailrecv: ERROR: can't popen(%s): %s\n", command.c_str(), strerror(errno));
+        Log("ERROR: can't popen(%s): %s\n", command.c_str(), strerror(errno));
         return -1;  // fail
     }
     fprintf(fp, "From %s\n", mail_from);
@@ -141,8 +157,8 @@ class Configure {
                                                     // and accept mail for.
     string deadletter_file;                         // file to append messages to that have no 'deliver'
 
-    vector<string> deliver_rcpt_to_shell_address;   // configured rcpt_to addresses to pipe to a shell command
-    vector<string> deliver_rcpt_to_shell_command;   // rcpt_to shell command to pipe matching mail to address
+    vector<string> deliver_rcpt_to_pipe_address;    // configured rcpt_to addresses to pipe to a shell command
+    vector<string> deliver_rcpt_to_pipe_command;    // rcpt_to shell command to pipe matching mail to address
 
     vector<string> deliver_rcpt_to_file_address;    // rcpt_to file addresses we allow
     vector<string> deliver_rcpt_to_file_filename;   // rcpt_to file filename we append letters to
@@ -172,7 +188,7 @@ public:
         int err = 0;
         FILE *fp;
         if ( (fp = fopen(conffile, "r")) == NULL) {
-            fprintf(stderr, "mailrecv: can't open %s: %s\n", conffile, strerror(errno));
+            Log("ERROR: can't open %s: %s\n", conffile, strerror(errno));
             return -1;
         }
         char line[LINE_LEN+1], arg1[LINE_LEN+1], arg2[LINE_LEN+1];
@@ -189,7 +205,7 @@ public:
             if ( line[0] == '\n' ) continue;
 
             // Show each line loaded if debugging..
-            if ( G_debug) fprintf(stderr, "DEBUG: Loading config: %s", line);
+            if ( G_debug) Log("DEBUG: Loading config: %s", line);   // line includes \n
 
             // Handle config commands..
             //
@@ -203,13 +219,13 @@ public:
             } else if ( sscanf(line, "deliver rcpt_to %s append %s", arg1, arg2) == 2 ) {
                 deliver_rcpt_to_file_address.push_back(arg1);
                 deliver_rcpt_to_file_filename.push_back(arg2);
-            } else if ( sscanf(line, "deliver rcpt_to %s shell %[^\n]", arg1, arg2) == 2 ) {
-                deliver_rcpt_to_shell_address.push_back(arg1);
-                deliver_rcpt_to_shell_command.push_back(arg2);
+            } else if ( sscanf(line, "deliver rcpt_to %s pipe %[^\n]", arg1, arg2) == 2 ) {
+                deliver_rcpt_to_pipe_address.push_back(arg1);
+                deliver_rcpt_to_pipe_command.push_back(arg2);
             } else if ( sscanf(line, "replace rcpt_to %s %s", arg1, arg2) == 2 ) {
                 // Make sure regex compiles..
                 if ( RegexMatch(arg1, "x") == -1 ) {
-                    fprintf(stderr, "ERROR: '%s' (LINE %d): bad replace rcpt_to regex '%s'\n", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): bad replace rcpt_to regex '%s'\n", conffile, linenum, arg1);
                     err = -1;
                 }
                 replace_rcpt_to_regex.push_back(arg1);
@@ -217,19 +233,19 @@ public:
             } else if ( sscanf(line, "allow remotehost %s", arg1) == 1 ) {
                 // Make sure regex compiles..
                 if ( RegexMatch(arg1, "x") == -1 ) {
-                    fprintf(stderr, "ERROR: '%s' (LINE %d): bad remotehost regex '%s'\n", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): bad remotehost regex '%s'\n", conffile, linenum, arg1);
                     err = -1;
                 }
                 allow_remotehost_regex.push_back(arg1);
             } else if ( sscanf(line, "allow remoteip %s", arg1) == 1 ) {
                 // Make sure regex compiles..
                 if ( RegexMatch(arg1, "x") == -1 ) {
-                    fprintf(stderr, "ERROR: '%s' (LINE %d): bad remoteip regex '%s'\n", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): bad remoteip regex '%s'\n", conffile, linenum, arg1);
                     err = -1;
                 }
                 allow_remoteip_regex.push_back(arg1);
             } else {
-                fprintf(stderr, "ERROR: '%s' (LINE %d): ignoring unknown config command: %s\n", conffile, linenum, line);
+                Log("ERROR: '%s' (LINE %d): ignoring unknown config command: %s\n", conffile, linenum, line);
                 err = -1;
             }
         }
@@ -239,28 +255,28 @@ public:
         //     Show what we loaded..
         //
         if ( G_debug ) {
-            fprintf(stderr, "--- Config file:\n");
-            fprintf(stderr, "    maxsecs: %d\n", MaxSecs());
-            fprintf(stderr, "    domain: '%s'\n", Domain());
-            fprintf(stderr, "    deadletter_file: '%s'\n", DeadLetterFile());
+            Log("DEBUG: --- Config file:\n");
+            Log("DEBUG:    maxsecs: %d\n", MaxSecs());
+            Log("DEBUG:    domain: '%s'\n", Domain());
+            Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
             size_t t;
             for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
-                fprintf(stderr, "    deliver rcpt_to: address='%s', which writes to file='%s'\n",
+                Log("DEBUG:    deliver rcpt_to: address='%s', which writes to file='%s'\n",
                     deliver_rcpt_to_file_address[t].c_str(),
                     deliver_rcpt_to_file_filename[t].c_str());
             }
-            for ( t=0; t<deliver_rcpt_to_shell_address.size(); t++ ) {
-                fprintf(stderr, "    deliver rcpt_to: address='%s', which pipes to cmd='%s'\n",
-                    deliver_rcpt_to_shell_address[t].c_str(),
-                    deliver_rcpt_to_shell_command[t].c_str());
+            for ( t=0; t<deliver_rcpt_to_pipe_address.size(); t++ ) {
+                Log("DEBUG:    deliver rcpt_to: address='%s', which pipes to cmd='%s'\n",
+                    deliver_rcpt_to_pipe_address[t].c_str(),
+                    deliver_rcpt_to_pipe_command[t].c_str());
             }
             for ( t=0; t<allow_remotehost_regex.size(); t++ ) {
-                fprintf(stderr, "    allow remote hostnames that match perl regex '%s'\n", allow_remotehost_regex[t].c_str());
+                Log("DEBUG:    allow remote hostnames that match perl regex '%s'\n", allow_remotehost_regex[t].c_str());
             }
             for ( t=0; t<allow_remoteip_regex.size(); t++ ) {
-                fprintf(stderr, "    allow remote IP addresses that match perl regex '%s'\n", allow_remoteip_regex[t].c_str());
+                Log("DEBUG:    allow remote IP addresses that match perl regex '%s'\n", allow_remoteip_regex[t].c_str());
             }
-            fprintf(stderr, "---\n");
+            Log("DEBUG: ---\n");
         }
         return err;     // let caller decide what to do
     }
@@ -274,7 +290,7 @@ public:
         if ( allow_remotehost_regex.size() == 0 &&
              allow_remoteip_regex.size()   == 0 ) {
             if ( G_debug) {
-                fprintf(stderr, "DEBUG: There are no checks configured for remotehost/remoteip"
+                Log("DEBUG: There are no checks configured for remotehost/remoteip"
                                 " (allowing anyone to connect)\n");
             }
             return 0;
@@ -284,24 +300,24 @@ public:
 
         // See if remote hostname allowed to connect to us
         for ( size_t t=0; t<allow_remotehost_regex.size(); t++ ) {
-            if ( G_debug) fprintf(stderr, "DEBUG: Checking '%s' against '%s'..\n",
-                                  allow_remotehost_regex[t].c_str(), remotehost);
+            if ( G_debug) Log("DEBUG: Checking '%s' against '%s'..\n",
+                              allow_remotehost_regex[t].c_str(), remotehost);
             if ( RegexMatch(allow_remotehost_regex[t].c_str(), remotehost) == 1 ) {
-                if ( G_debug) fprintf(stderr, "DEBUG:     Matched!\n");
+                if ( G_debug) Log("DEBUG:     Matched!\n");
                 return 0;   // match
             }
-            if ( G_debug) fprintf(stderr, "DEBUG:     No match.\n");
+            if ( G_debug) Log("DEBUG:     No match.\n");
         }
 
         // Check if remote IP allowed to connect to us
         for ( size_t t=0; t<allow_remoteip_regex.size(); t++ ) {
-            if ( G_debug) fprintf(stderr, "DEBUG: Checking '%s' against '%s'..\n",
-                                  allow_remoteip_regex[t].c_str(), remoteip);
+            if ( G_debug) Log("DEBUG: Checking '%s' against '%s'..\n",
+                              allow_remoteip_regex[t].c_str(), remoteip);
             if ( RegexMatch(allow_remoteip_regex[t].c_str(), remoteip) == 1 ) {
-                if ( G_debug) fprintf(stderr, "DEBUG:     Matched!\n");
+                if ( G_debug) Log("DEBUG:     Matched!\n");
                 return 0;   // match
             }
-            if ( G_debug) fprintf(stderr, "DEBUG:     No match.\n");
+            if ( G_debug) Log("DEBUG:     No match.\n");
         }
 
         return -1;          // No match? Failed
@@ -324,9 +340,9 @@ public:
             }
         }
         // Check for 'pipe to command' recipient..
-        for ( t=0; t<deliver_rcpt_to_shell_address.size(); t++ ) {
-            if ( strcmp(rcpt_to, deliver_rcpt_to_shell_address[t].c_str()) == 0 ) {
-                PipeMailToCommand(mail_from, rcpt_to, letter, deliver_rcpt_to_shell_command[t]);
+        for ( t=0; t<deliver_rcpt_to_pipe_address.size(); t++ ) {
+            if ( strcmp(rcpt_to, deliver_rcpt_to_pipe_address[t].c_str()) == 0 ) {
+                PipeMailToCommand(mail_from, rcpt_to, letter, deliver_rcpt_to_pipe_command[t]);
                 return 1;   // delivered
             }
         }
@@ -390,7 +406,7 @@ int ReadLetter(FILE *fp, vector<string>& letter) {
     char s[LINE_LEN+1];
     while (fgets(s, LINE_LEN, stdin)) {
         StripCRLF(s);
-        fprintf(stderr, "LETTER: '%s'\n", s);
+        if ( G_debug ) Log("DEBUG: Letter: '%s'\n", s);
         // End of letter? done
         if ( strcmp(s, ".") == 0 ) return 0;
         // Otherwise append lines with CRLF removed to letter
@@ -412,13 +428,14 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
 
     // WE IMPLEMENT RFC 822 HELO PROTOCOL ONLY
     printf("220 %s SMTP (RFC 822) mailrecv\n", domain);
+    fflush(stdout);
 
     int quit = 0;
     while (!quit && fgets(line, LINE_LEN-1, stdin)) {
         line[LINE_LEN] = 0;        // extra caution
         StripCRLF(line);
         if ( G_debug ) 
-            fprintf(stderr, "DEBUG: SMTP from %s [%s]: %s\n", remotehost, remoteip, line);
+            Log("DEBUG: SMTP from %s [%s]: %s\n", remotehost, remoteip, line);
 
         // Break up command into args
         arg1[0] = arg2[0] = 0;
@@ -441,8 +458,7 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
             } else {
                 printf("501 Unknown argument '%s'%s", arg1, CRLF);
                 fflush(stdout);
-                fprintf(stderr, "%s [%s] ERROR: unknown MAIL argument '%s'",
-		    remotehost, remoteip, arg1);
+                Log("ERROR: unknown MAIL argument '%s' from %s [%s]\n", arg1, remotehost, remoteip);
             }
         } else if ( ISCMD("RCPT") ) {
             if ( ISARG1("TO:") ) {
@@ -451,8 +467,8 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
                 printf("250 %s... recipient ok%s", rcpt_to, CRLF);
             } else {
                 printf("501 Unknown argument '%s'%s", arg1, CRLF);
-                fprintf(stderr, "%s [%s] ERROR: unknown RCPT argument '%s'",
-		    remotehost, remoteip, arg1);
+                Log("ERROR: unknown RCPT argument '%s' from %s [%s]\n",
+		    arg1, remotehost, remoteip);
             }
         } else if ( ISCMD("DATA") ) {
             if ( rcpt_to[0] == 0 ) {
@@ -463,7 +479,7 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
                 printf("354 Start mail input; end with <CRLF>.<CRLF>%s", CRLF);
                 fflush(stdout);
                 if ( ReadLetter(stdin, letter) == -1 ) {
-                    fprintf(stderr, "%s %s: Premature end of input for DATA command\n",
+                    Log("ERROR: Premature end of input for DATA command from %s [%s]\n",
 		        remotehost, remoteip);
                     break;              // break fgets() loop
                 }
@@ -493,12 +509,12 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
                     ISCMD("SAML") || ISCMD("TURN") ) {
             // COMMANDS WE DON'T SUPPORT
             printf("502 Command not implemented or disabled%s", CRLF);
-            fprintf(stderr, "%s [%s] ERROR: Remote tried '%s', we don't support it\n",
-	        remotehost, remoteip, cmd);
+            Log("ERROR: Remote tried '%s', we don't support it from %s [%s]\n",
+	        cmd, remotehost, remoteip);
         } else {
             printf("500 Unknown command%s", CRLF);
-            fprintf(stderr, "%s [%s] ERROR: Remote tried '%s', unknown command\n",
-	        remotehost, remoteip, cmd);
+            Log("ERROR: Remote tried '%s', unknown command from %s [%s]\n",
+	        cmd, remotehost, remoteip);
         }
 
         // All commands end up here, successful or not
@@ -512,7 +528,7 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
         // GOT HERE? END OF INPUT
         //     Connection closed with no "QUIT" issued.
         //
-        fprintf(stderr, "%s %s: Premature end of input for SMTP commands\n",
+        Log("ERROR: Premature end of input for SMTP commands from %s [%s]\n",
             remotehost, remoteip);
         return 1;               // indicate an error occurred
     }
@@ -543,7 +559,7 @@ int main(int argc, const char *argv[]) {
     for (int t=1; t<argc; t++) {
         if (strcmp(argv[t], "-c") == 0) {
 	    if (++t >= argc) {
-	        fprintf(stderr, "mailrecv: ERROR: expected filename after '-c'\n");
+	        Log("ERROR: expected filename after '-c'\n");
                 return 1;
 	    }
             conffile = argv[t];
@@ -553,7 +569,7 @@ int main(int argc, const char *argv[]) {
         } else if (strncmp(argv[t], "-h", 2) == 0) {
 	    HelpAndExit();
         } else {
-	    fprintf(stderr, "mailrecv: ERROR: unknown argument '%s'\n", argv[t]);
+	    Log("ERROR: unknown argument '%s'\n", argv[t]);
             HelpAndExit();
         }
     }
@@ -563,7 +579,7 @@ int main(int argc, const char *argv[]) {
         // Tell remote we can't receive SMTP at this time
         printf("221 Cannot receive messages at this time.\n");
         fflush(stdout);
-        fprintf(stderr, "mailrecv: ERROR: config file has errors (see above)\n");
+        Log("ERROR: config file has errors (see above)\n");
         return 1;       // fail
     }
 
@@ -577,7 +593,7 @@ int main(int argc, const char *argv[]) {
     if ( G_conf.CheckRemote(remotehost, remoteip) < 0 ) {
         printf("221 Cannot receive messages from %s [%s] at this time.\n", remotehost, remoteip);
         fflush(stdout);
-        fprintf(stderr, "DENIED: Connection from %s [%s] not in allow_remotehost/ip lists\n", remotehost, remoteip);
+        Log("DENIED: Connection from %s [%s] not in allow_remotehost/ip lists\n", remotehost, remoteip);
         return 1;
     }
 
