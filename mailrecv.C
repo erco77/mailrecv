@@ -32,6 +32,7 @@
 #include <syslog.h>     // syslog()
 #include <pcre.h>       // perl regular expressions API (see 'man pcreapi(3)')
 #include <sys/socket.h> // getpeername()
+#include <netdb.h>      // gethostbyaddr()
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <string>
@@ -361,31 +362,37 @@ Configure G_conf;
 // Minimum commands we must support:
 //      HELO MAIL RCPT DATA RSET NOOP QUIT VRFY
 
-// RETURN REMOTE'S IP ADDRESS
+// Remote's hostname + ip address
+char G_remotehost[256];
+char G_remoteip[80];
+
+// RETURN REMOTE'S IP ADDRESS + HOSTNAME
 //    fp -- tcp connection as a FILE* (e.g. as xinetd would hand to us)
-//    s  -- returned IP address string
 //
-int GetRemoteIPAddr(FILE *fp, char *s, int maxlen) {
+int GetRemoteHostInfo(FILE *fp) {
     struct sockaddr_in raddr;
     socklen_t raddr_size = sizeof(raddr);
     if ( getpeername(fileno(fp), (struct sockaddr*)&raddr, &raddr_size) == 0 ) {
-        // stdin is a TCP socket, get the IP address
-        sprintf(s, "%.*s", maxlen, inet_ntoa(raddr.sin_addr));
+        // Get remote IP address string
+        sprintf(G_remoteip, "%.*s", int(sizeof(G_remoteip))-1, inet_ntoa(raddr.sin_addr));
+
+        // Get remote Hostname string
+        struct hostent *he;
+        if ( he = gethostbyaddr((struct addr_in*)&(raddr.sin_addr),
+                                sizeof(raddr.sin_addr), AF_INET) ) {
+            sprintf(G_remotehost, "%.*s", int(sizeof(G_remotehost))-1, he->h_name);
+        } else {
+            strcpy(G_remotehost, "???");
+        }
+        return 0;
     } else {
         // Non-fatal, i.e. if testing from a shell
         perror("WARNING: getpeername() couldn't determine remote IP address:");
-        strcpy(s, "?.?.?.?");
+        strcpy(G_remotehost, "???");
+        strcpy(G_remoteip,   "?.?.?.?");
         return -1;
     }
     return 0;
-}
-
-// RETURN REMOTE'S HOSTNAME
-//    fp -- tcp connection as a FILE* (e.g. as xinetd would hand to us)
-//    s  -- returned hostname
-//
-int GetRemoteHostname(FILE *fp, char *s, int maxlen) {
-    GetRemoteIPAddr(fp, s, maxlen);             // TODO: Use getnameinfo(3)
 }
 
 // TRUNCATE STRING AT CR/LF
@@ -395,7 +402,7 @@ void StripCRLF(char *s) {
     if ( (eol = strchr(s, '\n')) ) { *eol = 0; }
 }
 
-#define ISCMD(x)         !strcasecmp(cmd, x)
+#define ISCMD(x)        !strcasecmp(cmd, x)
 #define ISARG1(x)       !strcasecmp(arg1, x)
 
 // READ LETTER'S DATA FROM THE REMOTE
@@ -416,7 +423,7 @@ int ReadLetter(FILE *fp, vector<string>& letter) {
 }
 
 // Handle a complete SMTP session with the remote on stdin/stdout
-int HandleSMTP(const char *remotehost, const char *remoteip) {
+int HandleSMTP() {
     vector<string> letter;
     char line[LINE_LEN+1],              // raw line buffer
          cmd[LINE_LEN+1],               // cmd received
@@ -434,8 +441,7 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
     while (!quit && fgets(line, LINE_LEN-1, stdin)) {
         line[LINE_LEN] = 0;        // extra caution
         StripCRLF(line);
-        if ( G_debug ) 
-            Log("DEBUG: SMTP from %s [%s]: %s\n", remotehost, remoteip, line);
+        if ( G_debug ) Log("DEBUG: SMTP cmd: %s\n", line);
 
         // Break up command into args
         arg1[0] = arg2[0] = 0;
@@ -448,27 +454,36 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
             printf("221 %s closing connection%s", domain, CRLF);
             fflush(stdout);
         } else if ( ISCMD("HELO") ) {
-            printf("250 %s Hello %s [%s]%s", domain, remotehost, remoteip, CRLF);
+            printf("250 %s Hello %s [%s]%s", domain, G_remotehost, G_remoteip, CRLF);
             fflush(stdout);
         } else if ( ISCMD("MAIL") ) {
-            if ( ISARG1("FROM:")) {
+            if ( ISARG1("FROM:")) {                         // "MAIL FROM: foo@bar.com"? (space after ":")
                 strcpy(mail_from, arg2);
                 printf("250 '%s': Sender ok%s", mail_from, CRLF);
                 fflush(stdout);
             } else {
-                printf("501 Unknown argument '%s'%s", arg1, CRLF);
-                fflush(stdout);
-                Log("ERROR: unknown MAIL argument '%s' from %s [%s]\n", arg1, remotehost, remoteip);
+                if ( strncasecmp(arg1,"FROM:", 5) == 0 ) {  // "MAIL FROM:foo@bar.com"? (NO space after ":")
+                    strcpy(mail_from, arg1+5);              // get address after the ":"
+                    printf("250 '%s': Sender ok%s", mail_from, CRLF);
+                    fflush(stdout);
+                } else {
+                    printf("501 Unknown argument '%s'%s", arg1, CRLF);
+                    fflush(stdout);
+                    Log("ERROR: unknown MAIL argument '%s'\n", arg1);
+                }
             }
         } else if ( ISCMD("RCPT") ) {
             if ( ISARG1("TO:") ) {
                 strcpy(rcpt_to, arg2);
-                // TODO: If recipient fails, return "550 unknown local user"
                 printf("250 %s... recipient ok%s", rcpt_to, CRLF);
             } else {
-                printf("501 Unknown argument '%s'%s", arg1, CRLF);
-                Log("ERROR: unknown RCPT argument '%s' from %s [%s]\n",
-		    arg1, remotehost, remoteip);
+                if ( strncasecmp(arg1, "TO:", 3) == 0 ) {  // "RCPT TO:foo@bar.com"? (NO space after ":")
+                    strcpy(rcpt_to, arg1+3);               // get address after the ":"
+                    printf("250 %s... recipient ok%s", rcpt_to, CRLF);
+                } else {
+                    printf("501 Unknown argument '%s'%s", arg1, CRLF);
+                    Log("ERROR: unknown RCPT argument '%s'\n", arg1);
+                }
             }
         } else if ( ISCMD("DATA") ) {
             if ( rcpt_to[0] == 0 ) {
@@ -479,8 +494,7 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
                 printf("354 Start mail input; end with <CRLF>.<CRLF>%s", CRLF);
                 fflush(stdout);
                 if ( ReadLetter(stdin, letter) == -1 ) {
-                    Log("ERROR: Premature end of input for DATA command from %s [%s]\n",
-		        remotehost, remoteip);
+                    Log("ERROR: Premature end of input for DATA command\n");
                     break;              // break fgets() loop
                 }
 		if ( letter.size() < 3 ) {
@@ -509,12 +523,10 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
                     ISCMD("SAML") || ISCMD("TURN") ) {
             // COMMANDS WE DON'T SUPPORT
             printf("502 Command not implemented or disabled%s", CRLF);
-            Log("ERROR: Remote tried '%s', we don't support it from %s [%s]\n",
-	        cmd, remotehost, remoteip);
+            Log("ERROR: Remote tried '%s', we don't support it\n", cmd);
         } else {
             printf("500 Unknown command%s", CRLF);
-            Log("ERROR: Remote tried '%s', unknown command from %s [%s]\n",
-	        cmd, remotehost, remoteip);
+            Log("ERROR: Remote tried '%s', unknown command\n", cmd);
         }
 
         // All commands end up here, successful or not
@@ -528,8 +540,7 @@ int HandleSMTP(const char *remotehost, const char *remoteip) {
         // GOT HERE? END OF INPUT
         //     Connection closed with no "QUIT" issued.
         //
-        Log("ERROR: Premature end of input for SMTP commands from %s [%s]\n",
-            remotehost, remoteip);
+        Log("ERROR: Premature end of input for SMTP commands\n");
         return 1;               // indicate an error occurred
     }
 }
@@ -548,6 +559,7 @@ void HelpAndExit() {
 }
 
 int main(int argc, const char *argv[]) {
+    GetRemoteHostInfo(stdin);
 
     // Force bourne shell for popen(command)..
     setenv("SHELL", "/bin/sh", 1);
@@ -574,29 +586,27 @@ int main(int argc, const char *argv[]) {
         }
     }
 
+    // Log remote host connection
+    Log("SMTP connection from remote host %s [%s]\n", G_remotehost, G_remoteip);
+
     // Load config file
     if ( G_conf.Load(conffile) < 0 ) {
         // Tell remote we can't receive SMTP at this time
         printf("221 Cannot receive messages at this time.\n");
         fflush(stdout);
-        Log("ERROR: config file has errors (see above)\n");
+        Log("ERROR: Config file has errors (above): "
+            "told remote we can't receive emails at this time\n");
         return 1;       // fail
     }
 
-    // Get the remote IP address for stdin
-    char remoteip[LINE_LEN+1];
-    char remotehost[LINE_LEN+1];
-    GetRemoteIPAddr(stdin, remoteip, LINE_LEN);
-    GetRemoteHostname(stdin, remotehost, LINE_LEN);
-    
     // Check if remote allowed to connect to us
-    if ( G_conf.CheckRemote(remotehost, remoteip) < 0 ) {
-        printf("221 Cannot receive messages from %s [%s] at this time.\n", remotehost, remoteip);
+    if ( G_conf.CheckRemote(G_remotehost, G_remoteip) < 0 ) {
+        printf("221 Cannot receive messages from %s [%s] at this time.\n", G_remotehost, G_remoteip);
         fflush(stdout);
-        Log("DENIED: Connection from %s [%s] not in allow_remotehost/ip lists\n", remotehost, remoteip);
+        Log("DENIED: Connection from %s [%s] not in allow_remotehost/ip lists\n", G_remotehost, G_remoteip);
         return 1;
     }
 
     // Handle the SMTP session with the remote
-    return HandleSMTP(remotehost, remoteip);
+    return HandleSMTP();
 }
