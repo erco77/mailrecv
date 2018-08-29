@@ -44,24 +44,29 @@ using namespace std;
 #define CRLF            "\r\n"
 #define CONFIG_FILE     "/etc/mailrecv.conf"
 
-int G_debug = 0;
+#define ISLOG(s) if (G_debugflags[0] && (G_debugflags[0]=='a'||strpbrk(G_debugflags, s)))
+
+// a -- all
+// c -- show config file loading process
+// s -- SMTP commands
+// l -- show letter as it's received
+// r -- show regex pattern match checks
+// f -- show file/pipe open/save/close
+//
+const char *G_debugflags = "";
 
 // Log a message...
+//     Besides the usual printf() behavior, %m is replaced with strerror(errno).
+//
 void Log(const char *msg, ...) {
-    // Format the message...
-    va_list      ap;			// Argument list pointer
-    char         buffer[1024];		// Message buffer
-    unsigned int bytes;			// Size of message
-
+    va_list ap;
     va_start(ap, msg);
-    bytes = vsnprintf(buffer, sizeof(buffer), msg, ap);
+    vsyslog(LOG_ERR, msg, ap);
     va_end(ap);
-
-    syslog(LOG_ERR, "%s", buffer);
 }
 
 // Do a regular expression match test
-// 
+//
 //     regex -- regular expression to match against string
 //     match -- string to be matched
 //
@@ -121,6 +126,7 @@ int AppendMailToFile(const char *mail_from,
                      const vector<string>& letter,
                      const string& filename) {
     FILE *fp;
+    ISLOG("f") { Log("DEBUG: fopen(%s,'a')\n", filename.c_str()); }
     if ( (fp = fopen(filename.c_str(), "a")) == NULL) {
         Log("ERROR: can't append to %s: %s\n", filename.c_str(), strerror(errno));
         return -1;  // fail
@@ -129,7 +135,8 @@ int AppendMailToFile(const char *mail_from,
     for ( size_t t=0; t<letter.size(); t++ ) {
         fprintf(fp, "%s\n", letter[t].c_str());
     }
-    fclose(fp);
+    int ret = fclose(fp);
+    ISLOG("f") { Log("DEBUG: fclose() returned %d\n", ret); }
     return 1;       // success
 }
 
@@ -138,6 +145,7 @@ int PipeMailToCommand(const char *mail_from,
                       const char *rcpt_to,
                       const vector<string>& letter,
                       const string& command) {
+    ISLOG("f") { Log("DEBUG: popen(%s,'w')..\n", command.c_str()); }
     FILE *fp;
     if ( (fp = popen(command.c_str(), "w")) == NULL) {
         Log("ERROR: can't popen(%s): %s\n", command.c_str(), strerror(errno));
@@ -147,7 +155,8 @@ int PipeMailToCommand(const char *mail_from,
     for ( size_t t=0; t<letter.size(); t++ ) {
         fprintf(fp, "%s\n", letter[t].c_str());
     }
-    pclose(fp);
+    int ret = pclose(fp);
+    ISLOG("f") { Log("DEBUG: pclose() returned %d\n", ret); }
     return 1;       // success
 }
 
@@ -188,6 +197,7 @@ public:
     int Load(const char *conffile) {
         int err = 0;
         FILE *fp;
+        ISLOG("fc") { Log("DEBUG: fopen(%s,'r')..\n", conffile); }
         if ( (fp = fopen(conffile, "r")) == NULL) {
             Log("ERROR: can't open %s: %s\n", conffile, strerror(errno));
             return -1;
@@ -206,7 +216,7 @@ public:
             if ( line[0] == '\n' ) continue;
 
             // Show each line loaded if debugging..
-            if ( G_debug) Log("DEBUG: Loading config: %s", line);   // line includes \n
+            ISLOG("c") { Log("DEBUG: Loading config: %s", line); }   // line includes \n
 
             // Handle config commands..
             //
@@ -215,6 +225,12 @@ public:
             //
             if ( sscanf(line, "domain %s", arg1) == 1 ) {
                 domain = arg1;
+            } else if ( sscanf(line, "debug %s", arg1) == 1 ) {
+                if ( !G_debugflags[0] ) {   // no command line override?
+                    if ( strcmp(arg1, "-") != 0 ) {
+                        G_debugflags = (const char*)strdup(arg1);
+                    }
+                }
             } else if ( sscanf(line, "deadletter_file %s", arg1) == 1 ) {
                 deadletter_file = arg1;
             } else if ( sscanf(line, "deliver rcpt_to %s append %s", arg1, arg2) == 2 ) {
@@ -250,12 +266,13 @@ public:
                 err = -1;
             }
         }
-        fclose(fp);
+        int ret = fclose(fp);
+        ISLOG("f") { Log("DEBUG: fclose() returned %d\n", ret); }
 
         // Debugging enabled via command line?
         //     Show what we loaded..
         //
-        if ( G_debug ) {
+        ISLOG("c") {
             Log("DEBUG: --- Config file:\n");
             Log("DEBUG:    maxsecs: %d\n", MaxSecs());
             Log("DEBUG:    domain: '%s'\n", Domain());
@@ -290,7 +307,7 @@ public:
         // Nothing configured? Allow anyone
         if ( allow_remotehost_regex.size() == 0 &&
              allow_remoteip_regex.size()   == 0 ) {
-            if ( G_debug) {
+            ISLOG("r") {
                 Log("DEBUG: There are no checks configured for remotehost/remoteip"
                                 " (allowing anyone to connect)\n");
             }
@@ -301,24 +318,28 @@ public:
 
         // See if remote hostname allowed to connect to us
         for ( size_t t=0; t<allow_remotehost_regex.size(); t++ ) {
-            if ( G_debug) Log("DEBUG: Checking '%s' against '%s'..\n",
-                              allow_remotehost_regex[t].c_str(), remotehost);
+            ISLOG("r") {
+                Log("DEBUG: Checking '%s' against '%s'..\n",
+                    allow_remotehost_regex[t].c_str(), remotehost);
+            }
             if ( RegexMatch(allow_remotehost_regex[t].c_str(), remotehost) == 1 ) {
-                if ( G_debug) Log("DEBUG:     Matched!\n");
+                ISLOG("r") { Log("DEBUG:     Matched!\n"); }
                 return 0;   // match
             }
-            if ( G_debug) Log("DEBUG:     No match.\n");
+            ISLOG("r") { Log("DEBUG:     No match.\n"); }
         }
 
         // Check if remote IP allowed to connect to us
         for ( size_t t=0; t<allow_remoteip_regex.size(); t++ ) {
-            if ( G_debug) Log("DEBUG: Checking '%s' against '%s'..\n",
-                              allow_remoteip_regex[t].c_str(), remoteip);
+            ISLOG("r") {
+                Log("DEBUG: Checking '%s' against '%s'..\n",
+                    allow_remoteip_regex[t].c_str(), remoteip);
+            }
             if ( RegexMatch(allow_remoteip_regex[t].c_str(), remoteip) == 1 ) {
-                if ( G_debug) Log("DEBUG:     Matched!\n");
+                ISLOG("r") { Log("DEBUG:     Matched!\n"); }
                 return 0;   // match
             }
-            if ( G_debug) Log("DEBUG:     No match.\n");
+            ISLOG("r") { Log("DEBUG:     No match.!\n"); }
         }
 
         return -1;          // No match? Failed
@@ -340,6 +361,7 @@ public:
                 return 1;   // delivered
             }
         }
+
         // Check for 'pipe to command' recipient..
         for ( t=0; t<deliver_rcpt_to_pipe_address.size(); t++ ) {
             if ( strcmp(rcpt_to, deliver_rcpt_to_pipe_address[t].c_str()) == 0 ) {
@@ -347,8 +369,10 @@ public:
                 return 1;   // delivered
             }
         }
+
         // If we're here, nothing matched.. write to deadletter file
         AppendMailToFile(mail_from, rcpt_to, letter, deadletter_file);
+
         return 1;   // delivered
     }
 
@@ -387,7 +411,7 @@ int GetRemoteHostInfo(FILE *fp) {
         return 0;
     } else {
         // Non-fatal, i.e. if testing from a shell
-        perror("WARNING: getpeername() couldn't determine remote IP address:");
+        Log("WARNING: getpeername() couldn't determine remote IP address: %m");
         strcpy(G_remotehost, "???");
         strcpy(G_remoteip,   "?.?.?.?");
         return -1;
@@ -413,7 +437,7 @@ int ReadLetter(FILE *fp, vector<string>& letter) {
     char s[LINE_LEN+1];
     while (fgets(s, LINE_LEN, stdin)) {
         StripCRLF(s);
-        if ( G_debug ) Log("DEBUG: Letter: '%s'\n", s);
+        ISLOG("l") { Log("DEBUG: Letter: '%s'\n", s); }
         // End of letter? done
         if ( strcmp(s, ".") == 0 ) return 0;
         // Otherwise append lines with CRLF removed to letter
@@ -441,7 +465,7 @@ int HandleSMTP() {
     while (!quit && fgets(line, LINE_LEN-1, stdin)) {
         line[LINE_LEN] = 0;        // extra caution
         StripCRLF(line);
-        if ( G_debug ) Log("DEBUG: SMTP cmd: %s\n", line);
+        ISLOG("s") { Log("DEBUG: SMTP cmd: %s\n", line); }
 
         // Break up command into args
         arg1[0] = arg2[0] = 0;
@@ -577,7 +601,15 @@ int main(int argc, const char *argv[]) {
             conffile = argv[t];
 	}
 	else if (strcmp(argv[t], "-d") == 0) {
-            G_debug = 1;
+            if (++t >= argc) {
+                G_debugflags = "a";
+            } else {
+                if ( strcmp(argv[t], "-") == 0 ) {
+                    G_debugflags = "";
+                } else {
+                    G_debugflags = argv[t];
+                }
+            }
         } else if (strncmp(argv[t], "-h", 2) == 0) {
 	    HelpAndExit();
         } else {
