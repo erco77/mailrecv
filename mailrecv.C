@@ -25,7 +25,7 @@
 // 80 //////////////////////////////////////////////////////////////////////////
 
 #include <stdio.h>
-#include <string.h>     // strchr(), strerror()
+#include <string.h>     // strchr()
 #include <errno.h>      // errno
 #include <stdlib.h>     // exit()
 #include <stdarg.h>     // vargs
@@ -44,19 +44,26 @@ using namespace std;
 #define CRLF            "\r\n"
 #define CONFIG_FILE     "/etc/mailrecv.conf"
 
+// Check for log flags
 #define ISLOG(s) if (G_debugflags[0] && (G_debugflags[0]=='a'||strpbrk(G_debugflags, s)))
 
-// a -- all
-// c -- show config file loading process
-// s -- SMTP commands
-// l -- show letter as it's received
-// r -- show regex pattern match checks
-// f -- show file/pipe open/save/close
+// Log flags.
+//    Can be one or more of these single letter flags.
+//    An empty string disables all optional logging.
+//
+//    a -- all (enables all optional flags)
+//    c -- show config file loading process
+//    s -- SMTP commands
+//    l -- show letter as it's received
+//    r -- show regex pattern match checks
+//    f -- show file/pipe open/save/close
+//    w -- log non-essential warnings
 //
 const char *G_debugflags = "";
 
 // Log a message...
-//     Besides the usual printf() behavior, %m is replaced with strerror(errno).
+//     In addition to the usual printf() behavior, %m is replaced with strerror(errno)
+//     due to syslog(3).
 //
 void Log(const char *msg, ...) {
     va_list ap;
@@ -67,8 +74,8 @@ void Log(const char *msg, ...) {
 
 // Do a regular expression match test
 //
-//     regex -- regular expression to match against string
-//     match -- string to be matched
+//     regex[in] -- regular expression to match against string
+//     match[in] -- string to be matched
 //
 // Returns:
 //     1: string matched
@@ -76,8 +83,8 @@ void Log(const char *msg, ...) {
 //    -1: an error occurred (reason was printed to stderr)
 //
 int RegexMatch(const char*regex, const char *match) {
-    const char *regex_errorstr;		// returned error if any
-    int         regex_erroroff;		// offset in string where error occurred
+    const char *regex_errorstr;         // returned error if any
+    int         regex_erroroff;         // offset in string where error occurred
 
     // Compile the regex..
     pcre *regex_compiled = pcre_compile(regex, 0, &regex_errorstr, &regex_erroroff, NULL);
@@ -85,7 +92,7 @@ int RegexMatch(const char*regex, const char *match) {
         Log("ERROR: could not compile regex '%s': %s\n", regex, regex_errorstr);
         Log("                               %*s^\n",     regex_erroroff, ""); // point to the error
         Log("                               %*sError here\n", regex_erroroff, "");
-	return -1;
+        return -1;
     }
 
     // Optimize regex
@@ -93,7 +100,7 @@ int RegexMatch(const char*regex, const char *match) {
     if ( regex_errorstr != NULL ) {
         pcre_free(regex_compiled);  // don't leak compiled regex
         Log("ERROR: Could not study regex '%s': %s\n", regex, regex_errorstr);
-	return -1;
+        return -1;
     }
 
     // Now see if we can match string
@@ -109,29 +116,29 @@ int RegexMatch(const char*regex, const char *match) {
 
     // Check match results..
     if ( ret < 0 ) {
-	switch (ret) {
-	    case PCRE_ERROR_NOMATCH:
+        switch (ret) {
+            case PCRE_ERROR_NOMATCH:
                 return 0;  // string didn't match
-	    default:
+            default:
                 Log("ERROR: bad regex '%s'\n", regex);
                 return -1;
-	}
+        }
     }
     return 1;   // string matched
 }
 
-// Append letter to specified file
-int AppendMailToFile(const char *mail_from,
-                     const char *rcpt_to,
-                     const vector<string>& letter,
-                     const string& filename) {
+// Append email to the specified file
+int AppendMailToFile(const char *mail_from,         // SMTP 'mail from:'
+                     const char *rcpt_to,           // SMTP 'rcpt to:'
+                     const vector<string>& letter,  // email contents, including headers, blank line, body
+                     const string& filename) {      // filename to append to
     FILE *fp;
     ISLOG("f") { Log("DEBUG: fopen(%s,'a')\n", filename.c_str()); }
     if ( (fp = fopen(filename.c_str(), "a")) == NULL) {
-        Log("ERROR: can't append to %s: %s\n", filename.c_str(), strerror(errno));
+        Log("ERROR: can't append to %s: %m\n", filename.c_str());   // %m: see syslog(3)
         return -1;  // fail
     }
-    fprintf(fp, "From %s\n", mail_from);
+    fprintf(fp, "From %s\n", mail_from);            // XXX: perhaps unneeded; useful as a message separator
     for ( size_t t=0; t<letter.size(); t++ ) {
         fprintf(fp, "%s\n", letter[t].c_str());
     }
@@ -141,17 +148,17 @@ int AppendMailToFile(const char *mail_from,
 }
 
 // Pipe letter to specified shell command
-int PipeMailToCommand(const char *mail_from,
-                      const char *rcpt_to,
-                      const vector<string>& letter,
-                      const string& command) {
+int PipeMailToCommand(const char *mail_from,        // SMTP 'mail from:'
+                      const char *rcpt_to,          // SMTP 'rcpt to:'
+                      const vector<string>& letter, // email contents, including headers, blank line, body
+                      const string& command) {      // unix shell command to write to
     ISLOG("f") { Log("DEBUG: popen(%s,'w')..\n", command.c_str()); }
     FILE *fp;
     if ( (fp = popen(command.c_str(), "w")) == NULL) {
-        Log("ERROR: can't popen(%s): %s\n", command.c_str(), strerror(errno));
+        Log("ERROR: can't popen(%s): %m\n", command.c_str());
         return -1;  // fail
     }
-    fprintf(fp, "From %s\n", mail_from);
+    fprintf(fp, "From %s\n", mail_from);            // XXX: might not be needed
     for ( size_t t=0; t<letter.size(); t++ ) {
         fprintf(fp, "%s\n", letter[t].c_str());
     }
@@ -161,6 +168,8 @@ int PipeMailToCommand(const char *mail_from,
 }
 
 // mailrecv's configuration file class
+//     TODO: This should be moved to a separate file.
+//
 class Configure {
     int maxsecs;                                    // maximum seconds program should run before stopping
     string domain;                                  // domain our server should know itself as (e.g. "example.com")
@@ -183,7 +192,7 @@ public:
     Configure() {
         maxsecs = 300;
         domain  = "example.com";
-        deadletter_file = "/dev/null";              // must be "something"
+        deadletter_file = "/dev/null";              // must be set to "something"
     }
 
     // Accessors
@@ -199,7 +208,7 @@ public:
         FILE *fp;
         ISLOG("fc") { Log("DEBUG: fopen(%s,'r')..\n", conffile); }
         if ( (fp = fopen(conffile, "r")) == NULL) {
-            Log("ERROR: can't open %s: %s\n", conffile, strerror(errno));
+            Log("ERROR: can't open %s: %m\n", conffile);
             return -1;
         }
         char line[LINE_LEN+1], arg1[LINE_LEN+1], arg2[LINE_LEN+1];
@@ -269,9 +278,7 @@ public:
         int ret = fclose(fp);
         ISLOG("f") { Log("DEBUG: fclose() returned %d\n", ret); }
 
-        // Debugging enabled via command line?
-        //     Show what we loaded..
-        //
+        // Show everything we actually loaded..
         ISLOG("c") {
             Log("DEBUG: --- Config file:\n");
             Log("DEBUG:    maxsecs: %d\n", MaxSecs());
@@ -303,7 +310,12 @@ public:
     //     Checks if any 'allow remotehost/remoteip ..' commands were configured,
     //     and if so, do match checks.
     //
-    int CheckRemote(const char *remotehost, const char *remoteip) {
+    // Returns:
+    //     0 -- Remote is allowed
+    //    -1 -- Remote is NOT allowed
+    //
+    int CheckRemote(const char *remotehost,     // remote's hostname
+                    const char *remoteip) {     // remote's IP address string
         // Nothing configured? Allow anyone
         if ( allow_remotehost_regex.size() == 0 &&
              allow_remoteip_regex.size()   == 0 ) {
@@ -347,11 +359,14 @@ public:
 
     // Deliver mail to recipient.
     //     If there's no configured recipient, write to deadletter file.
-    //     Returns 1 on success, -1 on error (reason printed to stderr).
     //
-    int DeliverMail(const char* mail_from,
-                    const char *rcpt_to,
-                    const vector<string>& letter) {
+    // Returns:
+    //     1 on success
+    //    -1 on error (reason printed to stderr).
+    //
+    int DeliverMail(const char* mail_from,          // SMTP 'mail from:'
+                    const char *rcpt_to,            // SMTP 'rcpt to:'
+                    const vector<string>& letter) { // email contents, including headers, blank line, body
         size_t t;
 
         // Check for 'append to file' recipient..
@@ -390,8 +405,18 @@ Configure G_conf;
 char G_remotehost[256];
 char G_remoteip[80];
 
-// RETURN REMOTE'S IP ADDRESS + HOSTNAME
-//    fp -- tcp connection as a FILE* (e.g. as xinetd would hand to us)
+// Return with remote's ip address + hostname in globals
+//    Sets globals: G_remotehost, G_remoteip
+//
+//    fp -- tcp connection as a FILE* (typically stdin because xinetd invoked us)
+//
+// Returns:
+//     0 -- success (got IP for sure, may or may not have gotten remote hostname)
+//    -1 -- could not determine any remote info
+//
+// TODO: Allow remote hostname lookups to be optional (as it adds DNS lookup load).
+// TODO: Such an option would need to be automatically enabled if the conf file
+// TODO: "allow remotehost .." is specified.
 //
 int GetRemoteHostInfo(FILE *fp) {
     struct sockaddr_in raddr;
@@ -419,7 +444,7 @@ int GetRemoteHostInfo(FILE *fp) {
     return 0;
 }
 
-// TRUNCATE STRING AT CR/LF
+// TRUNCATE STRING AT FIRST CR OR LF
 void StripCRLF(char *s) {
     char *eol;
     if ( (eol = strchr(s, '\r')) ) { *eol = 0; }
@@ -431,9 +456,13 @@ void StripCRLF(char *s) {
 
 // READ LETTER'S DATA FROM THE REMOTE
 //     Assumes an SMTP "DATA" command was just received.
-//     Returns 0 on success, -1 on premature end of input.
 //
-int ReadLetter(FILE *fp, vector<string>& letter) {
+// Returns:
+//     0 on success
+//    -1 on premature end of input.
+//
+int ReadLetter(FILE *fp,                    // [in] connection to remote
+               vector<string>& letter) {    // [in] array for saved letter
     char s[LINE_LEN+1];
     while (fgets(s, LINE_LEN, stdin)) {
         StripCRLF(s);
@@ -448,7 +477,7 @@ int ReadLetter(FILE *fp, vector<string>& letter) {
 
 // Handle a complete SMTP session with the remote on stdin/stdout
 int HandleSMTP() {
-    vector<string> letter;
+    vector<string> letter;              // array for received email (SMTP "DATA")
     char line[LINE_LEN+1],              // raw line buffer
          cmd[LINE_LEN+1],               // cmd received
          arg1[LINE_LEN+1],              // arg1 received
@@ -457,10 +486,11 @@ int HandleSMTP() {
          rcpt_to[LINE_LEN+1];           // The remote's "RCPT TO:" value
     const char *domain = G_conf.Domain();
 
-    // WE IMPLEMENT RFC 822 HELO PROTOCOL ONLY
+    // We implement RFC 822 "HELO" protocol only.. no fancy EHLO stuff.
     printf("220 %s SMTP (RFC 822) mailrecv\n", domain);
     fflush(stdout);
 
+    // READ ALL SMTP COMMANDS FROM REMOTE UNTIL "QUIT" OR EOF
     int quit = 0;
     while (!quit && fgets(line, LINE_LEN-1, stdin)) {
         line[LINE_LEN] = 0;        // extra caution
@@ -521,14 +551,14 @@ int HandleSMTP() {
                     Log("ERROR: Premature end of input for DATA command\n");
                     break;              // break fgets() loop
                 }
-		if ( letter.size() < 3 ) {
-		    // Even a one line email has more header lines than this
-		    printf("554 Message data was too short%s", CRLF);
-		} else {
-		    // Handle mail delivery
-		    printf("250 Message accepted for delivery%s", CRLF);
-		    G_conf.DeliverMail(mail_from, rcpt_to, letter);
-		}
+                if ( letter.size() < 3 ) {
+                    // Even a one line email has more header lines than this
+                    printf("554 Message data was too short%s", CRLF);
+                } else {
+                    // Handle mail delivery
+                    printf("250 Message accepted for delivery%s", CRLF);
+                    G_conf.DeliverMail(mail_from, rcpt_to, letter);
+                }
             }
         } else if ( ISCMD("RSET") ) {
             mail_from[0] = 0;
@@ -558,14 +588,12 @@ int HandleSMTP() {
     }
 
     if ( quit ) {
-        // Normal end to transaction
+        // Normal end to session
         return 0;
     } else {
-        // GOT HERE? END OF INPUT
-        //     Connection closed with no "QUIT" issued.
-        //
-        Log("ERROR: Premature end of input for SMTP commands\n");
-        return 1;               // indicate an error occurred
+        // If we're here, connection closed with no "QUIT".
+        ISLOG("w") { Log("WARNING: Premature end of input for SMTP commands\n"); }
+        return 1;               // indicate a possible network error occurred
     }
 }
 
@@ -574,10 +602,10 @@ void HelpAndExit() {
     fputs("mailrecv - a simple SMTP xinetd daemon (V " VERSION ")\n"
           "        See LICENSE file packaged with newsd for license/copyright info.\n"
           "\n"
-	  "Options\n"
-	  "    -c config-file     -- use 'config-file' instead of default (" CONFIG_FILE ")\n"
-	  "    -d                 -- enable debugging messages on stderr\n"
-	  "\n",
+          "Options\n"
+          "    -c config-file     -- use 'config-file' instead of default (" CONFIG_FILE ")\n"
+          "    -d                 -- enable debugging messages on stderr\n"
+          "\n",
           stderr);
     exit(1);
 }
@@ -594,13 +622,13 @@ int main(int argc, const char *argv[]) {
     // Parse command line, possibly override default conffile, etc.
     for (int t=1; t<argc; t++) {
         if (strcmp(argv[t], "-c") == 0) {
-	    if (++t >= argc) {
-	        Log("ERROR: expected filename after '-c'\n");
+            if (++t >= argc) {
+                Log("ERROR: expected filename after '-c'\n");
                 return 1;
-	    }
+            }
             conffile = argv[t];
-	}
-	else if (strcmp(argv[t], "-d") == 0) {
+        }
+        else if (strcmp(argv[t], "-d") == 0) {
             if (++t >= argc) {
                 G_debugflags = "a";
             } else {
@@ -611,9 +639,9 @@ int main(int argc, const char *argv[]) {
                 }
             }
         } else if (strncmp(argv[t], "-h", 2) == 0) {
-	    HelpAndExit();
+            HelpAndExit();
         } else {
-	    Log("ERROR: unknown argument '%s'\n", argv[t]);
+            Log("ERROR: unknown argument '%s'\n", argv[t]);
             HelpAndExit();
         }
     }
