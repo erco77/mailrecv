@@ -23,14 +23,15 @@ WHAT IS mailrecv?
 WHY DID YOU WRITE THIS?
 
     In my case, it was easier to write this than to configure sendmail,
-    lol. And since I only needed to receive emails from a single server,
-    it's easy to just allow SMTP connections from a single domain (though
-    several can be specified).
+    lol. And in my case I /only/ needed to receive emails from a single
+    trusted server, it's easy to rule out the entire internet, ignoring
+    complex issues like spam and cracking probes.
 
-    This just seemed "safer" than having to configure a full on mail
-    system, because it's such a simple tool, it's easy to add any
-    customizations I want to it, without a lot of network code and
-    numerous files.
+    This just seemed "safer" than having to configure a complex mail
+    system that may take hours and hours to master and perhaps never
+    really fully understand.. whereas this is such a simple tool, it's
+    easy to understand and add any kind of site specific customizations
+    one wants, without a lot of network code and confusing external stuff.
 
 LICENSING
 
