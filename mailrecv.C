@@ -372,6 +372,7 @@ public:
         // Check for 'append to file' recipient..
         for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
             if ( strcmp(rcpt_to, deliver_rcpt_to_file_address[t].c_str()) == 0 ) {
+                // TODO: Check error return of AppendMailToFile(), fall thru to deadletter?
                 AppendMailToFile(mail_from, rcpt_to, letter, deliver_rcpt_to_file_filename[t]);
                 return 1;   // delivered
             }
@@ -380,17 +381,23 @@ public:
         // Check for 'pipe to command' recipient..
         for ( t=0; t<deliver_rcpt_to_pipe_address.size(); t++ ) {
             if ( strcmp(rcpt_to, deliver_rcpt_to_pipe_address[t].c_str()) == 0 ) {
+                // TODO: Check error return of PipeMailToCommand(), fall thru to deadletter?
                 PipeMailToCommand(mail_from, rcpt_to, letter, deliver_rcpt_to_pipe_command[t]);
                 return 1;   // delivered
             }
         }
 
         // If we're here, nothing matched.. write to deadletter file
-        AppendMailToFile(mail_from, rcpt_to, letter, deadletter_file);
+        //
+        // TODO: Return -1 if deadletter append failed
+        //
+        // TODO: Pass back actual OS error to remote as part of SMTP response
+        //
+        if ( AppendMailToFile(mail_from, rcpt_to, letter, deadletter_file) < 0 )
+            return -1;    // failed deadletter delivery? Tell remote we can't deliver
 
         return 1;   // delivered
     }
-
 };
 
 Configure G_conf;
@@ -457,6 +464,12 @@ void StripCRLF(char *s) {
 // READ LETTER'S DATA FROM THE REMOTE
 //     Assumes an SMTP "DATA" command was just received.
 //
+//     TODO: Should insert a "Received:" block into the headers, above the first one
+//     TODO: encountered, e.g. 
+//     TODO:    Received: from <HELO_FROM> (remotehost [remoteIP])
+//     TODO:              by ourdomain.com (mailrecv) with SMTP id ?????
+//     TODO:              for <rcpt_to>; Sat,  8 Sep 2018 23:44:11 -0400 (EDT)
+//
 // Returns:
 //     0 on success
 //    -1 on premature end of input.
@@ -498,6 +511,9 @@ int HandleSMTP() {
         ISLOG("s") { Log("DEBUG: SMTP cmd: %s\n", line); }
 
         // Break up command into args
+        //    note: fgets() already ensures LINE_LEN max, so
+        //          sscanf() does not need to re-enforce length max.
+        //
         arg1[0] = arg2[0] = 0;
         if ( sscanf(line, "%s%s%s", cmd, arg1, arg2) < 1 ) continue;
         arg1[LINE_LEN] = 0;     // extra caution
@@ -556,8 +572,13 @@ int HandleSMTP() {
                     printf("554 Message data was too short%s", CRLF);
                 } else {
                     // Handle mail delivery
-                    printf("250 Message accepted for delivery%s", CRLF);
                     G_conf.DeliverMail(mail_from, rcpt_to, letter);
+                    // TODO: Check error return of DeliverMail(), on failure
+                    // TODO: log error and either (a) tell remote an error occurred
+                    // TODO: and drop msg, or (b) append to dead_letter and let remote
+                    // TODO: think it was delivered.
+                    //
+                    printf("250 Message accepted for delivery%s", CRLF);
                 }
             }
         } else if ( ISCMD("RSET") ) {
