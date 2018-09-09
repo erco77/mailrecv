@@ -7,25 +7,30 @@ WHAT IS mailrecv?
     THIS IS CURRENTLY A WORK IN PROGRESS -- NOT READY FOR PRIME TIME.
     THIS MESSAGE WILL BE REMOVED WHEN THE PROGRAM IS USABLE FOR THE PUBLIC.
     
-    mailrecv is a simple/dumb xinetd oriented SMTP server that simply
-    accepts emails and writes those allowed to a file based on the
-    recipient.
+    mailrecv is a simple/dumb xinetd oriented SMTP listener that simply
+    accepts emails in and writes the received email to either a file
+    or pipe based on the recipient. Multiple recipients can be configured.
 
-    It reads stdin/writes stdout, expecting those to be a TCP
-    connection opened by xinetd to a remote SMTP server attempting
-    to send an email to our domain.
+    Since it's an xinetd oriented tool, it reads stdin/writes stdout, 
+    expecting those to be a TCP connection prepared by xinetd listening
+    on an SMTP port, to act like an SMTP server to receive incoming emails.
 
     NOT INTENDED FOR NORMAL MAIL DELIVERY OR RELAYING.
     This is a dedicated tool for /just/ accepting emails and 
     writing the received messages to either a file or a pipe,
     depending on the configured allowed recipient(s).
     
-    This is basically a template for writing ones own custom
-    SMTP receiver.
+WHY DID YOU WRITE THIS?
 
-    In my case, I needed a mail server on a domain that would
-    receive mailing list emails, so that the received emails
-    can be gatewayed directly into our NNTP server for archival.
+    In my case, it was easier to write this than to configure sendmail,
+    lol. And since I only needed to receive emails from a single server,
+    it's easy to just allow SMTP connections from a single domain (though
+    several can be specified).
+
+    This just seemed "safer" than having to configure a full on mail
+    system, because it's such a simple tool, it's easy to add any
+    customizations I want to it, without a lot of network code and
+    numerous files.
 
 LICENSING
 
@@ -34,23 +39,70 @@ LICENSING
 
 BUILD INSTRUCTIONS
 
-    Run GNU make to build the mailrecv binary:
+    Dependencies: A C++ compiler environment, and the perl regular
+    expression library (libpcre), which on Ubuntu 16.x is a one line
+    install with 'apt install libpcre3-dev'.
+
+    To build, just run GNU 'make':
 
         make
+
+    ..this creates the mailrecv executable that is then used by xinetd
+    to start handling SMTP connections. (see INSTALL instructions below)
         
 INSTALL INSTRUCTIONS
 
-    TBD. Create an xinetd.d/mailrecv file that invokes this executable
-    as the desired user for port 25.
+    TBD. 
 
+    Basically configure an /etc/xinetd.d file to configure mailrecv
+    to listen on the network port 25 to handle SMTP connections.
+
+    Example: here's an /etc/xinetd.d/smtp file I used for testing:
+
+	service smtp
+	{
+	     socket_type         = stream
+	     wait                = no
+	     nice                = 10
+	     user                = mail
+	     server              = /usr/sbin/mailrecv
+	     server_args         = -c /etc/mailrecv.conf
+	     instances           = 4
+	     log_on_success     += PID HOST DURATION
+	}
+
+    With that, tell xinetd to reload, and connections to port 25
+    will cause mailrecv to handle the connection. 
+
+    With this configuration, you will only see xinetd in the process
+    table unless there's an active SMTP connection in progress, as xinetd
+    only starts 'mailrecv' when someone connects to port 25, and mailrecv
+    only remains running while an SMTP session is in progress.
+
+    One can test the server from a shell using 'netcat', e.g.
+
+        $ nc localhost 25				<-- run this to connect to mailrecv
+	220 mydomain.com SMTP (RFC 822) mailrecv	<-- mailrecv's response
+	help						<-- type 'help' and hit ENTER
+	214 Help:                                       \
+	    HELO, DATA, RSET, NOOP, QUIT,                |__ mailrecv responds with the
+	    MAIL FROM:,  RCPT TO:,                       |   smtp commands it supports
+	    VRFY, EXPN, EHLO, SEND, SOML, SAML, TURN    /
+	quit						<-- type 'quit' and hit ENTER
+	221 fltk.org closing connection                 <-- mailrecv finishes
+	$
 
 CONFIGURATION
 
-    TBD. Currently you hotrod the source code.
+    TBD.
+
+    See the mailrecv.conf and mailrecv-test.conf for examples of how to
+    configure. Perl regular expressions are used for pattern matching
+    the remote hostname/IP addresses, so it should be pretty flexible.
 
 DOCUMENTATION
 
-    TBD.
+    TBD. Should be a perldoc so it can be turned into a manpage and email.
 
 FEATURES
 
