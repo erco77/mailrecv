@@ -1,10 +1,10 @@
-> Put a limits on everything:
-    > Number of SMTP commands a remote can send, e.g. 25.
-    > Number of SMTP unknown command errors (in case someone just throws garbage at the port)
-    > Number of failed SMTP operations (e.g. if remote persists in continuing to send beyond RCPT TO max)
-    > Time limit in seconds
-    > DATA size limit (in bytes)
-    > Rcpt to: limit
+(DONE) > Put a limits on everything:
+(DONE)     > Number of SMTP commands a remote can send, e.g. 25.
+(DONE)     > Number of SMTP unknown command errors (in case someone just throws garbage at the port)
+(DONE)     > Number of failed SMTP operations (e.g. if remote persists in continuing to send beyond RCPT TO max)
+(DONE)     > Time limit in seconds
+(WIP)      > DATA size limit (in bytes)
+(WIP)      > Rcpt to: limit
 
       # LIMIT                 VALUE      ERROR CODE + MESSAGE
       # --------------------- -----      ------------------------------------
@@ -52,7 +52,7 @@
       #   550 No such recipient 'fred@bar.com'
 
 > NO: This means config involves multiple files, too complicated and too many
-      chances for attack vectors + abuse.
+  NO: chances for attack vectors + abuse.
   NO: 
   NO:   Allow a python script to be invoked for checking helo, mail from, rcpt to, and data
   NO:   So in mailrecv.conf:

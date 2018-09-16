@@ -28,6 +28,7 @@
 #include <string.h>     // strchr()
 #include <errno.h>      // errno
 #include <stdlib.h>     // exit()
+#include <unistd.h>     // sleep()
 #include <stdarg.h>     // vargs
 #include <syslog.h>     // syslog()
 #include <pcre.h>       // perl regular expressions API (see 'man pcreapi(3)')
@@ -35,6 +36,7 @@
 #include <netdb.h>      // gethostbyaddr()
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <pthread.h>    // pthread_create() for execution timer
 #include <string>
 #include <vector>
 
@@ -183,8 +185,23 @@ void RemoveAngleBrackets(char* address) {
 class Configure {
     int maxsecs;                                    // maximum seconds program should run before stopping
     string domain;                                  // domain our server should know itself as (e.g. "example.com")
-                                                    // and accept mail for.
+                                                    // and accept email messages for.
     string deadletter_file;                         // file to append messages to that have no 'deliver'
+
+    // Limits..
+    int limit_smtp_commands;           // limit on # smtp commands per session
+    int limit_smtp_unknowncmd;         // limit on # unknown smtp commands per session
+    int limit_smtp_failcmds;           // limit on # failed smtp commands
+    int limit_connection_secs;         // limit connection time (in secs)   // TODO: NOT YET IMPLEMENTED
+    int limit_smtp_data_size;          // limit on #bytes DATA command can receive  // TODO: NOT YET IMPLEMENTED
+    int limit_smtp_rcpt_to;            // limit on # "RCPT TO:" commands we can receive // TODO: NOT YET IMPLEMENTED
+    // Error strings for each limit..
+    string limit_smtp_commands_emsg;   // limit on # smtp commands per session
+    string limit_smtp_unknowncmd_emsg; // limit on # unknown smtp commands per session
+    string limit_smtp_failcmds_emsg;   // limit on # failed smtp commands
+    string limit_connection_secs_emsg; // limit connection time (in secs)
+    string limit_smtp_data_size_emsg;  // limit on #bytes DATA command can receive
+    string limit_smtp_rcpt_to_emsg;    // limit on # "RCPT TO:" commands we can receive
 
     vector<string> deliver_rcpt_to_pipe_address;    // configured rcpt_to addresses to pipe to a shell command (TODO: Should be regex instead?)
     vector<string> deliver_rcpt_to_pipe_command;    // rcpt_to shell command to pipe matching mail to address
@@ -206,12 +223,60 @@ public:
         maxsecs = 300;
         domain  = "example.com";
         deadletter_file = "/dev/null";              // must be set to "something"
+        limit_smtp_commands        = 25;
+        limit_smtp_commands_emsg   = "500 Too many SMTP commands received in session.";
+        limit_smtp_unknowncmd      = 4;
+        limit_smtp_unknowncmd_emsg = "500 Too many bad commands.";
+        limit_smtp_failcmds        = 4;
+        limit_smtp_failcmds_emsg   = "500 Too many failed commands.";
+        limit_connection_secs      = 600;
+        limit_connection_secs_emsg = "500 Connection timeout.";
+        limit_smtp_data_size       = 24000000;
+        limit_smtp_data_size_emsg  = "552 Too much mail data.";
+        limit_smtp_rcpt_to         = 5;
+        limit_smtp_rcpt_to_emsg    = "452 Too many recipients.";    // RFC 2821 4.5.3.1
     }
 
     // Accessors
     int MaxSecs() const { return maxsecs; }
     const char *Domain() const { return domain.c_str(); }
     const char *DeadLetterFile() const { return deadletter_file.c_str(); }
+
+    // Limit checks
+    // Returns:
+    //     0 -- if OK.
+    //    -1 -- if limit reached, emsg has error to send remote.
+    //
+    int CheckLimit(int val, string limit_name, string& emsg) {
+        if ( limit_name == "smtp_commands" ) {
+            if ( val < limit_smtp_commands ) return 0;
+            emsg = limit_smtp_commands_emsg;
+            return -1; 
+        } else if ( limit_name == "smtp_unknowncmd" ) {
+            if ( val < limit_smtp_unknowncmd ) return 0;
+            emsg = limit_smtp_unknowncmd_emsg;
+            return -1; 
+        } else if ( limit_name == "smtp_failcmds" ) {
+            if ( val < limit_smtp_failcmds ) return 0;
+            emsg = limit_smtp_failcmds_emsg;
+            return -1; 
+        } else if ( limit_name == "connection_secs" ) {
+            if ( val < limit_connection_secs ) return 0;
+            emsg = limit_connection_secs_emsg;
+            return -1; 
+        } else if ( limit_name == "smtp_data_size" ) {
+            if ( val < limit_smtp_data_size ) return 0;
+            emsg = limit_smtp_data_size_emsg;
+            return -1; 
+        } else if ( limit_name == "smtp_rcpt_to" ) {
+            if ( val < limit_smtp_rcpt_to ) return 0;
+            emsg = limit_smtp_rcpt_to_emsg;
+            return -1; 
+        }
+        // Shouldn't happen -- if we get here, there's an error in the source code!
+        emsg = "500 Program config error";
+        return -1;
+    }
 
     // Load the specified config file
     //     Returns 0 on success, -1 on error (reason printed on stderr)
@@ -253,6 +318,48 @@ public:
                         G_debugflags = (const char*)strdup(arg1);
                     }
                 }
+            } else if ( sscanf(line, "limit.smtp_commands %s %[^\n]", arg1, arg2) == 2 ) {
+                if ( sscanf(arg1, "%d", &limit_smtp_commands) != 1 ) {
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
+                limit_smtp_commands_emsg = arg2;
+            } else if ( sscanf(line, "limit.smtp_unknowncmd %s %[^\n]", arg1, arg2) == 2 ) {
+                if ( sscanf(arg1, "%d", &limit_smtp_unknowncmd) != 1 ) {
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
+                limit_smtp_unknowncmd_emsg = arg2;
+            } else if ( sscanf(line, "limit.smtp_failcmds %s %[^\n]", arg1, arg2) == 2 ) {
+                if ( sscanf(arg1, "%d", &limit_smtp_failcmds) != 1 ) {
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
+                limit_smtp_failcmds_emsg = arg2;
+            } else if ( sscanf(line, "limit.connection_secs %s %[^\n]", arg1, arg2) == 2 ) {
+                if ( sscanf(arg1, "%d", &limit_connection_secs) != 1 ) {
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
+                limit_connection_secs_emsg = arg2;
+            } else if ( sscanf(line, "limit.smtp_data_size %s %[^\n]", arg1, arg2) == 2 ) {
+                if ( sscanf(arg1, "%d", &limit_smtp_data_size) != 1 ) {
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
+                limit_smtp_data_size_emsg = arg2;
+            } else if ( sscanf(line, "limit.smtp_rcpt_to %s %[^\n]", arg1, arg2) == 2 ) {
+                if ( sscanf(arg1, "%d", &limit_smtp_rcpt_to) != 1 ) {
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
+                limit_smtp_rcpt_to_emsg = arg2;
             } else if ( sscanf(line, "deadletter_file %s", arg1) == 1 ) {
                 deadletter_file = arg1;
             } else if ( sscanf(line, "deliver rcpt_to %s append %s", arg1, arg2) == 2 ) {
@@ -312,6 +419,15 @@ public:
             Log("DEBUG:    maxsecs: %d\n", MaxSecs());
             Log("DEBUG:    domain: '%s'\n", Domain());
             Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
+
+            Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
+            Log("DEBUG:    limit_smtp_commands        max=%d msg=%s\n", limit_smtp_commands,   limit_smtp_commands_emsg.c_str());
+            Log("DEBUG:    limit_smtp_unknowncmd      max=%d msg=%s\n", limit_smtp_unknowncmd, limit_smtp_unknowncmd_emsg.c_str());
+            Log("DEBUG:    limit_smtp_failcmds        max=%d msg=%s\n", limit_smtp_failcmds,   limit_smtp_failcmds_emsg.c_str());
+            Log("DEBUG:    limit_connection_secs      max=%d msg=%s\n", limit_connection_secs, limit_connection_secs_emsg.c_str());
+            Log("DEBUG:    limit_smtp_data_size       max=%d msg=%s\n", limit_smtp_data_size,  limit_smtp_data_size_emsg.c_str());
+            Log("DEBUG:    limit_smtp_rcpt_to         max=%d msg=%s\n", limit_smtp_rcpt_to,    limit_smtp_rcpt_to_emsg.c_str());
+
             size_t t;
             for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
                 Log("DEBUG:    deliver rcpt_to: address='%s', which writes to file='%s'\n",
@@ -434,6 +550,21 @@ public:
     //   -1 -- Error address -- caller should send 'emsg' to remote, and skip delivery
     //
     int CheckErrorAddress(const char *address, string& emsg) {
+        // First, ignore address if it's already /configured/ to receive
+        {
+            // rcpt_to file?
+            for ( int t=0; t<deliver_rcpt_to_file_address.size(); t++ )
+                if ( strcmp(address, deliver_rcpt_to_file_address[t].c_str()) == 0 )
+                    return 0;       // OK to deliver
+        }
+        {
+            // rcpt_to pipe?
+            for ( int t=0; t<deliver_rcpt_to_pipe_address.size(); t++ )
+                if ( strcmp(address, deliver_rcpt_to_pipe_address[t].c_str()) == 0 )
+                    return 0;       // OK to deliver
+        }
+
+        // Check error addresses last
         for ( int i=0; i<errors_rcpt_to_regex.size(); i++ ) {
             if ( RegexMatch(errors_rcpt_to_regex[i].c_str(), address) == 1 ) {
                 emsg = errors_rcpt_to_message[i];
@@ -441,6 +572,24 @@ public:
             }
         }
         return 0;           // OK to deliver
+    }
+
+    // CHILD THREAD FOR EXECUTION TIMER
+    static void *ChildExecutionTimer(void *data) {
+        long secs = long(data);
+        sleep(secs);
+        // Timer expired? Send message to remote and exit immediately
+        const char *emsg = "500 Connection timeout (forcing close)\n";
+        write(1, emsg, strlen(emsg));
+        exit(0);
+    }
+
+    // Start execution timer thread
+    void StartExecutionTimer() {
+        static pthread_t dataready_tid = 0;
+        long secs = limit_connection_secs;
+        if ( dataready_tid != 0 ) return;   // only run once
+        pthread_create(&dataready_tid, NULL, ChildExecutionTimer, (void*)secs);
     }
 };
 
@@ -547,12 +696,31 @@ int HandleSMTP() {
     printf("220 %s SMTP (RFC 822) mailrecv\n", our_domain);
     fflush(stdout);
 
-    // READ ALL SMTP COMMANDS FROM REMOTE UNTIL "QUIT" OR EOF
+    // Limit counters
+    int smtp_commands_count = 0;
+    int smtp_unknowncmd_count = 0;
+    int smtp_fail_commands_count = 0;
+    int smtp_rcpt_to_count = 0;
+    // CheckLimit() returned error msg, if any
+    string emsg;
     int quit = 0;
+    // READ ALL SMTP COMMANDS FROM REMOTE UNTIL "QUIT" OR EOF
     while (!quit && fgets(line, LINE_LEN-1, stdin)) {
         line[LINE_LEN] = 0;        // extra caution
         StripCRLF(line);
+
         ISLOG("s") { Log("DEBUG: SMTP cmd: %s\n", line); }
+        ISLOG("s") { Log("DEBUG: SMTP cmd: cmdcount=%d, unknowncount=%d, failcount=%d\n", 
+                         smtp_commands_count, smtp_unknowncmd_count, smtp_fail_commands_count); }
+
+        // LIMIT CHECK: # SMTP COMMANDS
+        //    NOTE: Empty lines count towards the command counter..
+        //
+        if ( G_conf.CheckLimit(++smtp_commands_count, "smtp_commands", emsg) < 0 ) {
+            Log("SMTP #commands limit reached (%d)", smtp_commands_count);
+            printf("%s\n", emsg.c_str());
+            break;      // end session
+        }
 
         // Break up command into args
         //    note: fgets() already ensures LINE_LEN max, so
@@ -577,49 +745,58 @@ int HandleSMTP() {
                     strcpy(mail_from, arg1+5);              // get address after the ":"
                     printf("250 '%s': Sender ok%s", mail_from, CRLF);
                 } else {
+                    ++smtp_fail_commands_count;
                     printf("501 Unknown argument '%s'%s", arg1, CRLF);
                     Log("ERROR: unknown MAIL argument '%s'\n", arg1);
                 }
             }
         } else if ( ISCMD("RCPT") ) {
-            string emsg;
+            char *address;
             if ( ISARG1("TO:") ) {
-                char *address = arg2;
-                RemoveAngleBrackets(address);           // "<foo@bar.com>" -> "foo@bar.com"
-                if ( G_conf.CheckErrorAddress(address, emsg) < 0 ) {
-                    printf("%s\n", emsg.c_str());       // Failed send error, don't deliver
-                } else {
-                    strcpy(rcpt_to, address);           // Passed: ok to deliver
-                    printf("250 %s... recipient ok%s", rcpt_to, CRLF);
-                }
+                address = arg2;
+                goto rcpt_to;
             } else if ( strncasecmp(arg1, "TO:", 3) == 0 ) {   // "RCPT TO:foo@bar.com"? (NO space after ":")
-                char *address = arg1 + 3;               // get address after the ":"
-                RemoveAngleBrackets(address);           // "<foo@bar.com>" -> "foo@bar.com"
+                address = arg1 + 3;                            // get address after the ":"
+rcpt_to:
+                RemoveAngleBrackets(address);                  // "<foo@bar.com>" -> "foo@bar.com"
+
+                // LIMIT CHECK: # RCPT TO COMMANDS
+                if ( G_conf.CheckLimit(++smtp_rcpt_to_count, "smtp_rcpt_to", emsg) < 0 ) {
+                    Log("SMTP Number of 'rcpt to' recipients limit reached (%d)", smtp_rcpt_to_count);
+                    printf("%s\n", emsg.c_str());
+                    break;  // end session
+                }
                 if ( G_conf.CheckErrorAddress(address, emsg) < 0 ) {
-                    printf("%s\n", emsg.c_str());       // Failed: send error, don't deliver
+                    ++smtp_fail_commands_count;
+                    printf("%s\n", emsg.c_str());              // Failed: send error, don't deliver
                 } else {
-                    strcpy(rcpt_to, address);           // Passed: ok to deliver
+                    strcpy(rcpt_to, address);                  // Passed: ok to deliver
                     printf("250 %s... recipient ok%s", rcpt_to, CRLF);
                 }
             } else {
+                ++smtp_fail_commands_count;
                 printf("501 Unknown RCPT argument '%s'%s", arg1, CRLF);
                 Log("ERROR: unknown RCPT argument '%s'\n", arg1);
             }
         } else if ( ISCMD("DATA") ) {
             if ( rcpt_to[0] == 0 ) {
+                ++smtp_fail_commands_count;
                 printf("503 Bad sequence of commands -- missing RCPT TO%s", CRLF);
             } else if ( mail_from[0] == 0 ) {
+                ++smtp_fail_commands_count;
                 printf("503 Bad sequence of commands -- missing MAIL FROM%s", CRLF);
             } else {
                 printf("354 Start mail input; end with <CRLF>.<CRLF>%s", CRLF);
                 fflush(stdout);
                 if ( ReadLetter(stdin, letter) == -1 ) {
+                    ++smtp_fail_commands_count;
                     Log("ERROR: Premature end of input for DATA command\n");
                     break;              // break fgets() loop
                 }
                 if ( letter.size() < 3 ) {
                     // Even a one line email has more header lines than this
                     printf("554 Message data was too short%s", CRLF);
+                    ++smtp_fail_commands_count;
                 } else {
                     // Handle mail delivery
                     G_conf.DeliverMail(mail_from, rcpt_to, letter);
@@ -647,16 +824,35 @@ int HandleSMTP() {
                     ISCMD("SEND") || ISCMD("SOML") ||
                     ISCMD("SAML") || ISCMD("TURN") ) {
             // COMMANDS WE DON'T SUPPORT
+            ++smtp_fail_commands_count;
             printf("502 Command not implemented or disabled%s", CRLF);
             Log("ERROR: Remote tried '%s', we don't support it\n", cmd);
         } else {
+            ++smtp_fail_commands_count;
             printf("500 Unknown command%s", CRLF);
             Log("ERROR: Remote tried '%s', unknown command\n", cmd);
+
+            // LIMIT CHECK: # UNKNOWN SMTP COMMANDS
+            if ( G_conf.CheckLimit(++smtp_unknowncmd_count, "smtp_unknowncmd", emsg) < 0 ) {
+                Log("SMTP #unknown commands limit reached (%d)", smtp_unknowncmd_count);
+                printf("%s\n", emsg.c_str());
+                break;  // end session
+            }
         }
 
         // All commands end up here, successful or not
         fflush(stdout);
+
+        // LIMIT CHECK: # UNKNOWN SMTP COMMANDS
+        if ( G_conf.CheckLimit(smtp_fail_commands_count, "smtp_failcmds", emsg) < 0 ) {
+            Log("SMTP #failed commands limit reached (%d)", smtp_fail_commands_count);
+            printf("%s\n", emsg.c_str());
+            break;  // end session
+        }
     }
+
+    // Flush any closing responses to remote
+    fflush(stdout);
 
     if ( quit ) {
         // Normal end to session
@@ -737,6 +933,9 @@ int main(int argc, const char *argv[]) {
         Log("DENIED: Connection from %s [%s] not in allow_remotehost/ip lists\n", G_remotehost, G_remoteip);
         return 1;
     }
+
+    // Start execution timer
+    G_conf.StartExecutionTimer();
 
     // Handle the SMTP session with the remote
     return HandleSMTP();
