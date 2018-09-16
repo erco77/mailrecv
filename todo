@@ -3,8 +3,8 @@
 (DONE)     > Number of SMTP unknown command errors (in case someone just throws garbage at the port)
 (DONE)     > Number of failed SMTP operations (e.g. if remote persists in continuing to send beyond RCPT TO max)
 (DONE)     > Time limit in seconds
-(WIP)      > DATA size limit (in bytes)
-(WIP)      > Rcpt to: limit
+(DONE)     > DATA size limit (in bytes)
+(DONE)     > Rcpt to: limit
 
       # LIMIT                 VALUE      ERROR CODE + MESSAGE
       # --------------------- -----      ------------------------------------

@@ -189,12 +189,12 @@ class Configure {
     string deadletter_file;                         // file to append messages to that have no 'deliver'
 
     // Limits..
-    int limit_smtp_commands;           // limit on # smtp commands per session
-    int limit_smtp_unknowncmd;         // limit on # unknown smtp commands per session
-    int limit_smtp_failcmds;           // limit on # failed smtp commands
-    int limit_connection_secs;         // limit connection time (in secs)   // TODO: NOT YET IMPLEMENTED
-    int limit_smtp_data_size;          // limit on #bytes DATA command can receive  // TODO: NOT YET IMPLEMENTED
-    int limit_smtp_rcpt_to;            // limit on # "RCPT TO:" commands we can receive // TODO: NOT YET IMPLEMENTED
+    long limit_smtp_commands;          // limit on # smtp commands per session
+    long limit_smtp_unknowncmd;        // limit on # unknown smtp commands per session
+    long limit_smtp_failcmds;          // limit on # failed smtp commands
+    long limit_connection_secs;        // limit connection time (in secs)
+    long limit_smtp_data_size;         // limit on #bytes DATA command can receive
+    long limit_smtp_rcpt_to;           // limit on # "RCPT TO:" commands we can receive
     // Error strings for each limit..
     string limit_smtp_commands_emsg;   // limit on # smtp commands per session
     string limit_smtp_unknowncmd_emsg; // limit on # unknown smtp commands per session
@@ -247,7 +247,7 @@ public:
     //     0 -- if OK.
     //    -1 -- if limit reached, emsg has error to send remote.
     //
-    int CheckLimit(int val, string limit_name, string& emsg) {
+    int CheckLimit(long val, string limit_name, string& emsg) {
         if ( limit_name == "smtp_commands" ) {
             if ( val < limit_smtp_commands ) return 0;
             emsg = limit_smtp_commands_emsg;
@@ -319,42 +319,42 @@ public:
                     }
                 }
             } else if ( sscanf(line, "limit.smtp_commands %s %[^\n]", arg1, arg2) == 2 ) {
-                if ( sscanf(arg1, "%d", &limit_smtp_commands) != 1 ) {
+                if ( sscanf(arg1, "%ld", &limit_smtp_commands) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_commands_emsg = arg2;
             } else if ( sscanf(line, "limit.smtp_unknowncmd %s %[^\n]", arg1, arg2) == 2 ) {
-                if ( sscanf(arg1, "%d", &limit_smtp_unknowncmd) != 1 ) {
+                if ( sscanf(arg1, "%ld", &limit_smtp_unknowncmd) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_unknowncmd_emsg = arg2;
             } else if ( sscanf(line, "limit.smtp_failcmds %s %[^\n]", arg1, arg2) == 2 ) {
-                if ( sscanf(arg1, "%d", &limit_smtp_failcmds) != 1 ) {
+                if ( sscanf(arg1, "%ld", &limit_smtp_failcmds) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_failcmds_emsg = arg2;
             } else if ( sscanf(line, "limit.connection_secs %s %[^\n]", arg1, arg2) == 2 ) {
-                if ( sscanf(arg1, "%d", &limit_connection_secs) != 1 ) {
+                if ( sscanf(arg1, "%ld", &limit_connection_secs) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_connection_secs_emsg = arg2;
             } else if ( sscanf(line, "limit.smtp_data_size %s %[^\n]", arg1, arg2) == 2 ) {
-                if ( sscanf(arg1, "%d", &limit_smtp_data_size) != 1 ) {
+                if ( sscanf(arg1, "%ld", &limit_smtp_data_size) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_data_size_emsg = arg2;
             } else if ( sscanf(line, "limit.smtp_rcpt_to %s %[^\n]", arg1, arg2) == 2 ) {
-                if ( sscanf(arg1, "%d", &limit_smtp_rcpt_to) != 1 ) {
+                if ( sscanf(arg1, "%ld", &limit_smtp_rcpt_to) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
                     err = -1;
                     continue;
@@ -421,12 +421,12 @@ public:
             Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
 
             Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
-            Log("DEBUG:    limit_smtp_commands        max=%d msg=%s\n", limit_smtp_commands,   limit_smtp_commands_emsg.c_str());
-            Log("DEBUG:    limit_smtp_unknowncmd      max=%d msg=%s\n", limit_smtp_unknowncmd, limit_smtp_unknowncmd_emsg.c_str());
-            Log("DEBUG:    limit_smtp_failcmds        max=%d msg=%s\n", limit_smtp_failcmds,   limit_smtp_failcmds_emsg.c_str());
-            Log("DEBUG:    limit_connection_secs      max=%d msg=%s\n", limit_connection_secs, limit_connection_secs_emsg.c_str());
-            Log("DEBUG:    limit_smtp_data_size       max=%d msg=%s\n", limit_smtp_data_size,  limit_smtp_data_size_emsg.c_str());
-            Log("DEBUG:    limit_smtp_rcpt_to         max=%d msg=%s\n", limit_smtp_rcpt_to,    limit_smtp_rcpt_to_emsg.c_str());
+            Log("DEBUG:    limit_smtp_commands        max=%ld msg=%s\n", limit_smtp_commands,   limit_smtp_commands_emsg.c_str());
+            Log("DEBUG:    limit_smtp_unknowncmd      max=%ld msg=%s\n", limit_smtp_unknowncmd, limit_smtp_unknowncmd_emsg.c_str());
+            Log("DEBUG:    limit_smtp_failcmds        max=%ld msg=%s\n", limit_smtp_failcmds,   limit_smtp_failcmds_emsg.c_str());
+            Log("DEBUG:    limit_connection_secs      max=%ld msg=%s\n", limit_connection_secs, limit_connection_secs_emsg.c_str());
+            Log("DEBUG:    limit_smtp_data_size       max=%ld msg=%s\n", limit_smtp_data_size,  limit_smtp_data_size_emsg.c_str());
+            Log("DEBUG:    limit_smtp_rcpt_to         max=%ld msg=%s\n", limit_smtp_rcpt_to,    limit_smtp_rcpt_to_emsg.c_str());
 
             size_t t;
             for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
@@ -587,9 +587,11 @@ public:
     // Start execution timer thread
     void StartExecutionTimer() {
         static pthread_t dataready_tid = 0;
-        long secs = limit_connection_secs;
         if ( dataready_tid != 0 ) return;   // only run once
-        pthread_create(&dataready_tid, NULL, ChildExecutionTimer, (void*)secs);
+        pthread_create(&dataready_tid,
+                       NULL,
+                       ChildExecutionTimer,
+                       (void*)limit_connection_secs);
     }
 };
 
@@ -665,19 +667,31 @@ void StripCRLF(char *s) {
 //
 // Returns:
 //     0 on success
-//    -1 on premature end of input.
+//    -1 general failure (premature end of input, limit reached)
+//       emsg has error to send remote.
 //
 int ReadLetter(FILE *fp,                    // [in] connection to remote
-               vector<string>& letter) {    // [in] array for saved letter
+               vector<string>& letter,      // [in] array for saved letter
+               string &emsg) {              // [out] error to send remote on return -1
     char s[LINE_LEN+1];
+    long bytecount = 0;
     while (fgets(s, LINE_LEN, stdin)) {
         StripCRLF(s);
         ISLOG("l") { Log("DEBUG: Letter: '%s'\n", s); }
         // End of letter? done
         if ( strcmp(s, ".") == 0 ) return 0;
+        // Check limit
+        bytecount += strlen(s);
+        if ( G_conf.CheckLimit(bytecount, "smtp_data_size", emsg) < 0 ) {
+            Log("SMTP DATA limit reached (%d)", bytecount);
+            return -1;
+        }
         // Otherwise append lines with CRLF removed to letter
         letter.push_back(s);
     }
+    // Unexpected end of input
+    Log("Premature end of input while receiving email from remote");
+    emsg = "550 End of input during DATA command";
     return -1;                  // premature end of input
 }
 
@@ -788,9 +802,9 @@ rcpt_to:
             } else {
                 printf("354 Start mail input; end with <CRLF>.<CRLF>%s", CRLF);
                 fflush(stdout);
-                if ( ReadLetter(stdin, letter) == -1 ) {
+                if ( ReadLetter(stdin, letter, emsg) == -1 ) {
                     ++smtp_fail_commands_count;
-                    Log("ERROR: Premature end of input for DATA command\n");
+                    printf("%s\n", emsg.c_str());
                     break;              // break fgets() loop
                 }
                 if ( letter.size() < 3 ) {
