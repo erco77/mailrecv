@@ -1,6 +1,14 @@
 https://www.greenend.org.uk/rjk/tech/smtpreplies.html
 See rfc2821 for the basic specification of SMTP; see also rfc1123 for important additional information.
 
+The first digit of reply codes indicates positive/negative aspect:
+
+            1yz   Positive Preliminary reply
+            2yz   Positive Completion reply
+            3yz   Positive Intermediate reply
+            4yz   Transient Negative Completion reply
+            5yz   Permanent Negative Completion reply
+
 See rfc1893 and rfc2034 for information about enhanced status codes.
 
 Check the RFC index for further mail-related RFCs.
@@ -30,6 +38,7 @@ Reply codes in numerical order Code 	Meaning
 552 	Requested mail action aborted: exceeded storage allocation
 553 	Requested action not taken: mailbox name not allowed
 554 	Transaction failed
+
 Reply codes grouped by command Command 	Code 	Description
 connect
 	220	<domain> Service ready

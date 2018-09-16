@@ -176,14 +176,17 @@ class Configure {
                                                     // and accept mail for.
     string deadletter_file;                         // file to append messages to that have no 'deliver'
 
-    vector<string> deliver_rcpt_to_pipe_address;    // configured rcpt_to addresses to pipe to a shell command
+    vector<string> deliver_rcpt_to_pipe_address;    // configured rcpt_to addresses to pipe to a shell command (TODO: Should be regex instead?)
     vector<string> deliver_rcpt_to_pipe_command;    // rcpt_to shell command to pipe matching mail to address
 
-    vector<string> deliver_rcpt_to_file_address;    // rcpt_to file addresses we allow
+    vector<string> deliver_rcpt_to_file_address;    // rcpt_to file addresses we allow (TODO: Should be regex instead?)
     vector<string> deliver_rcpt_to_file_filename;   // rcpt_to file filename we append letters to
 
-    vector<string> replace_rcpt_to_regex;           // rcpt_to regex to search for
-    vector<string> replace_rcpt_to_after;           // rcpt_to regex match replacement string
+    vector<string> errors_rcpt_to_regex;            // error address to match
+    vector<string> errors_rcpt_to_message;          // error message to send remote on match
+
+    vector<string> replace_rcpt_to_regex;           // rcpt_to regex to search for (TODO: NOT YET IMPLEMENTED)
+    vector<string> replace_rcpt_to_after;           // rcpt_to regex match replacement string (TODO: NOT YET IMPLEMENTED)
 
     vector<string> allow_remotehost_regex;          // allowed remotehost name regex
     vector<string> allow_remoteip_regex;            // allowed remoteip address regex
@@ -248,10 +251,25 @@ public:
             } else if ( sscanf(line, "deliver rcpt_to %s pipe %[^\n]", arg1, arg2) == 2 ) {
                 deliver_rcpt_to_pipe_address.push_back(arg1);
                 deliver_rcpt_to_pipe_command.push_back(arg2);
+            } else if ( sscanf(line, "error rcpt_to %s %[^\n]", arg1, arg2) == 2 ) {
+                int ecode;
+                // Make sure error message includes 3 digit SMTP error code
+                if ( sscanf(arg2, "%d", &ecode) != 1 ) {
+                    Log("ERROR: '%s' (LINE %d): missing 3 digit SMTP error message '%s'", conffile, linenum, arg2);
+                    err = -1;
+                    continue;
+                }
+                if ( RegexMatch(arg1, "x") == -1 ) { // Make sure regex compiles..
+                    Log("ERROR: '%s' (LINE %d): bad 'error rcpt_to' regex '%s'\n", conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
+                errors_rcpt_to_regex.push_back(arg1);
+                errors_rcpt_to_message.push_back(arg2);
             } else if ( sscanf(line, "replace rcpt_to %s %s", arg1, arg2) == 2 ) {
                 // Make sure regex compiles..
                 if ( RegexMatch(arg1, "x") == -1 ) {
-                    Log("ERROR: '%s' (LINE %d): bad replace rcpt_to regex '%s'\n", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): bad 'replace rcpt_to' regex '%s'\n", conffile, linenum, arg1);
                     err = -1;
                 }
                 replace_rcpt_to_regex.push_back(arg1);
@@ -259,14 +277,14 @@ public:
             } else if ( sscanf(line, "allow remotehost %s", arg1) == 1 ) {
                 // Make sure regex compiles..
                 if ( RegexMatch(arg1, "x") == -1 ) {
-                    Log("ERROR: '%s' (LINE %d): bad remotehost regex '%s'\n", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): bad 'allow remotehost' regex '%s'\n", conffile, linenum, arg1);
                     err = -1;
                 }
                 allow_remotehost_regex.push_back(arg1);
             } else if ( sscanf(line, "allow remoteip %s", arg1) == 1 ) {
                 // Make sure regex compiles..
                 if ( RegexMatch(arg1, "x") == -1 ) {
-                    Log("ERROR: '%s' (LINE %d): bad remoteip regex '%s'\n", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): bad 'allow remoteip' regex '%s'\n", conffile, linenum, arg1);
                     err = -1;
                 }
                 allow_remoteip_regex.push_back(arg1);
@@ -398,6 +416,22 @@ public:
 
         return 1;   // delivered
     }
+
+    // See if address is an error address
+    //
+    // Returns:
+    //    0 -- OK to deliver -- not an error address
+    //   -1 -- Error address -- caller should send 'emsg' to remote, and skip delivery
+    //
+    int CheckErrorAddress(const char *address, string& emsg) {
+        for ( int i=0; i<errors_rcpt_to_regex.size(); i++ ) {
+            if ( RegexMatch(errors_rcpt_to_regex[i].c_str(), address) == 1 ) {
+                emsg = errors_rcpt_to_message[i];
+                return -1;  // NOT OK to deliver -- emsg has error to send remote
+            }
+        }
+        return 0;           // OK to deliver
+    }
 };
 
 Configure G_conf;
@@ -495,12 +529,12 @@ int HandleSMTP() {
          cmd[LINE_LEN+1],               // cmd received
          arg1[LINE_LEN+1],              // arg1 received
          arg2[LINE_LEN+1],              // arg2 received
-         mail_from[LINE_LEN+1],         // The remote's "MAIL FROM:" value
-         rcpt_to[LINE_LEN+1];           // The remote's "RCPT TO:" value
-    const char *domain = G_conf.Domain();
+         mail_from[LINE_LEN+1] = "",    // The remote's "MAIL FROM:" value
+         rcpt_to[LINE_LEN+1]   = "";    // The remote's "RCPT TO:" value (TODO: Should be array; there can be more than one per transaction)
+    const char *our_domain = G_conf.Domain();
 
     // We implement RFC 822 "HELO" protocol only.. no fancy EHLO stuff.
-    printf("220 %s SMTP (RFC 822) mailrecv\n", domain);
+    printf("220 %s SMTP (RFC 822) mailrecv\n", our_domain);
     fflush(stdout);
 
     // READ ALL SMTP COMMANDS FROM REMOTE UNTIL "QUIT" OR EOF
@@ -521,39 +555,43 @@ int HandleSMTP() {
 
         if ( ISCMD("QUIT") ) {
             quit = 1;
-            printf("221 %s closing connection%s", domain, CRLF);
-            fflush(stdout);
+            printf("221 %s closing connection%s", our_domain, CRLF);
         } else if ( ISCMD("HELO") ) {
-            printf("250 %s Hello %s [%s]%s", domain, G_remotehost, G_remoteip, CRLF);
-            fflush(stdout);
+            printf("250 %s Hello %s [%s]%s", our_domain, G_remotehost, G_remoteip, CRLF);
         } else if ( ISCMD("MAIL") ) {
             if ( ISARG1("FROM:")) {                         // "MAIL FROM: foo@bar.com"? (space after ":")
                 strcpy(mail_from, arg2);
                 printf("250 '%s': Sender ok%s", mail_from, CRLF);
-                fflush(stdout);
             } else {
                 if ( strncasecmp(arg1,"FROM:", 5) == 0 ) {  // "MAIL FROM:foo@bar.com"? (NO space after ":")
                     strcpy(mail_from, arg1+5);              // get address after the ":"
                     printf("250 '%s': Sender ok%s", mail_from, CRLF);
-                    fflush(stdout);
                 } else {
                     printf("501 Unknown argument '%s'%s", arg1, CRLF);
-                    fflush(stdout);
                     Log("ERROR: unknown MAIL argument '%s'\n", arg1);
                 }
             }
         } else if ( ISCMD("RCPT") ) {
+            string emsg;
             if ( ISARG1("TO:") ) {
-                strcpy(rcpt_to, arg2);
-                printf("250 %s... recipient ok%s", rcpt_to, CRLF);
-            } else {
-                if ( strncasecmp(arg1, "TO:", 3) == 0 ) {  // "RCPT TO:foo@bar.com"? (NO space after ":")
-                    strcpy(rcpt_to, arg1+3);               // get address after the ":"
-                    printf("250 %s... recipient ok%s", rcpt_to, CRLF);
+                const char *address = arg2;
+                if ( G_conf.CheckErrorAddress(address, emsg) < 0 ) {
+                    printf("%s\n", emsg.c_str());       // Failed send error, don't deliver
                 } else {
-                    printf("501 Unknown argument '%s'%s", arg1, CRLF);
-                    Log("ERROR: unknown RCPT argument '%s'\n", arg1);
+                    strcpy(rcpt_to, address);           // Passed: ok to deliver
+                    printf("250 %s... recipient ok%s", rcpt_to, CRLF);
                 }
+            } else if ( strncasecmp(arg1, "TO:", 3) == 0 ) {   // "RCPT TO:foo@bar.com"? (NO space after ":")
+                const char *address = arg1 + 3;         // get address after the ":"
+                if ( G_conf.CheckErrorAddress(address, emsg) < 0 ) {
+                    printf("%s\n", emsg.c_str());       // Failed: send error, don't deliver
+                } else {
+                    strcpy(rcpt_to, address);           // Passed: ok to deliver
+                    printf("250 %s... recipient ok%s", rcpt_to, CRLF);
+                }
+            } else {
+                printf("501 Unknown RCPT argument '%s'%s", arg1, CRLF);
+                Log("ERROR: unknown RCPT argument '%s'\n", arg1);
             }
         } else if ( ISCMD("DATA") ) {
             if ( rcpt_to[0] == 0 ) {
