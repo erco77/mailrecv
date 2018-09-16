@@ -167,6 +167,16 @@ int PipeMailToCommand(const char *mail_from,        // SMTP 'mail from:'
     return 1;       // success
 }
 
+// Remove surrounding <>'s from email addresses
+void RemoveAngleBrackets(char* address) {
+    for ( char *p = address; *p; p++ ) {
+        if ( *p == '<' ) continue;
+        if ( *p == '>' ) break;
+        *address++ = *p;
+    }
+    *address++ = 0;
+}
+
 // mailrecv's configuration file class
 //     TODO: This should be moved to a separate file.
 //
@@ -574,7 +584,8 @@ int HandleSMTP() {
         } else if ( ISCMD("RCPT") ) {
             string emsg;
             if ( ISARG1("TO:") ) {
-                const char *address = arg2;
+                char *address = arg2;
+                RemoveAngleBrackets(address);           // "<foo@bar.com>" -> "foo@bar.com"
                 if ( G_conf.CheckErrorAddress(address, emsg) < 0 ) {
                     printf("%s\n", emsg.c_str());       // Failed send error, don't deliver
                 } else {
@@ -582,7 +593,8 @@ int HandleSMTP() {
                     printf("250 %s... recipient ok%s", rcpt_to, CRLF);
                 }
             } else if ( strncasecmp(arg1, "TO:", 3) == 0 ) {   // "RCPT TO:foo@bar.com"? (NO space after ":")
-                const char *address = arg1 + 3;         // get address after the ":"
+                char *address = arg1 + 3;               // get address after the ":"
+                RemoveAngleBrackets(address);           // "<foo@bar.com>" -> "foo@bar.com"
                 if ( G_conf.CheckErrorAddress(address, emsg) < 0 ) {
                     printf("%s\n", emsg.c_str());       // Failed: send error, don't deliver
                 } else {
