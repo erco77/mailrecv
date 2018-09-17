@@ -1,21 +1,6 @@
-(DONE) > Put a limits on everything:
-(DONE)     > Number of SMTP commands a remote can send, e.g. 25.
-(DONE)     > Number of SMTP unknown command errors (in case someone just throws garbage at the port)
-(DONE)     > Number of failed SMTP operations (e.g. if remote persists in continuing to send beyond RCPT TO max)
-(DONE)     > Time limit in seconds
-(DONE)     > DATA size limit (in bytes)
-(DONE)     > Rcpt to: limit
+> 'error' needs to honor new allowgroup stuff.
 
-      # LIMIT                 VALUE      ERROR CODE + MESSAGE
-      # --------------------- -----      ------------------------------------
-      limit.smtp-commands     25         500 Too many SMTP commands received
-      limit.smtp-unknowncmd   4          500 Too many bad commands
-      limit.smtp-failcmds     4          500 Too many failed commands
-      limit.connection        600        500 Connection timeout
-      limit.data-size         24000000   552 Too much mail data.
-      limit.rcpt_to           5          452 Too many recipients (RFC 2821 4.5.3.1)
-
-> When allowing connections from the great unwashed, 
+> (WIP/DONE?) When allowing connections from the great unwashed, 
   we might want to:
 
       * Allow an email address to deliver ONLY from certain servers
