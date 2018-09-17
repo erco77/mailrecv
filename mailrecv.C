@@ -341,10 +341,10 @@ public:
     //
     int IsRemoteAllowedByGroup(const string& groupname) {
         if ( groupname == "*" ) return 1;                       // '*' means always allow
-        for ( int t=0; t<allowgroups.size(); t++ ) {            // find the group..
+        for ( size_t t=0; t<allowgroups.size(); t++ ) {         // find the group..
             AllowGroup &ag = allowgroups[t];
             if ( ag.name != groupname ) continue;               // no match, keep looking
-            for ( int i=0; i<ag.regexes.size(); i++ )           // found group, check remote against all regexes in group
+            for ( size_t i=0; i<ag.regexes.size(); i++ )        // found group, check remote against all regexes in group
                 if ( IsRemoteAllowed(ag.regexes[i].c_str()) )   // check remote hostname/ip
                     return 1;   // match found!
             return 0;           // no match; not allowed
@@ -370,7 +370,7 @@ public:
             return -1;
         }
         // See if group name exists. If so, append regex, done.
-        for ( int i=0; i<allowgroups.size(); i++ ) {
+        for ( size_t i=0; i<allowgroups.size(); i++ ) {
             AllowGroup &agroup = allowgroups[i];
             if ( agroup.name == name ) {
                 agroup.regexes.push_back(regex); // append to existing
@@ -387,7 +387,7 @@ public:
 
     // See if allowgroup is defined
     int IsAllowGroupDefined(const char *groupname) {
-        for ( int i=0; i<allowgroups.size(); i++ )
+        for ( size_t i=0; i<allowgroups.size(); i++ )
             if ( allowgroups[i].name == groupname )
                 return 1; // yep
         return -1;  // nope
@@ -567,7 +567,7 @@ public:
                 ostringstream os;
                 AllowGroup &ag = allowgroups[t];
                 os << "DEBUG:    allowgroup '" << ag.name << "': ";
-                for ( int i=0; i<ag.regexes.size(); i++ )
+                for ( size_t i=0; i<ag.regexes.size(); i++ )
                     { os << (i>0?", ":"") << "'" << ag.regexes[i] << "'"; }
                 Log("%s\n", os.str().c_str());
             }
@@ -664,27 +664,34 @@ public:
     //   -1 -- Reject delivery -- send error message in 'emsg' to remote
     //
     int CheckErrorAddress(const char *address, string& emsg) {
-        int t;
+        size_t t;
         // First, ignore address configured for regular delivery..
         // ..rcpt_to file?
-        for ( int t=0; t<deliver_rcpt_to_file_address.size(); t++ )
-            if ( strcmp(address, deliver_rcpt_to_file_address[t].c_str()) == 0 )
-                if ( IsRemoteAllowedByGroup(deliver_rcpt_to_file_allowgroups[t].c_str()) )
-                    { return 0; }     // OK to deliver
-                else
-                    { emsg = "550 Remote not configured to deliver for this address"; return -1; }
+        for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
+            if ( strcmp(address, deliver_rcpt_to_file_address[t].c_str()) == 0 ) {
+                if ( IsRemoteAllowedByGroup(deliver_rcpt_to_file_allowgroups[t].c_str()) ) {
+                    return 0;         // OK to deliver
+                } else {
+                    emsg = "550 Remote not configured to deliver for this address";
+                    return -1;
+                }
+            }
+        }
         // ..rcpt_to pipe?
-        for ( int t=0; t<deliver_rcpt_to_pipe_address.size(); t++ )
-            if ( strcmp(address, deliver_rcpt_to_pipe_address[t].c_str()) == 0 )
-                if ( IsRemoteAllowedByGroup(deliver_rcpt_to_pipe_allowgroups[t].c_str()) )
-                    { return 0; }     // OK to deliver
-                else
-                    { emsg = "550 Remote not configured to deliver for this address"; return -1; }
-
+        for ( t=0; t<deliver_rcpt_to_pipe_address.size(); t++ ) {
+            if ( strcmp(address, deliver_rcpt_to_pipe_address[t].c_str()) == 0 ) {
+                if ( IsRemoteAllowedByGroup(deliver_rcpt_to_pipe_allowgroups[t].c_str()) ) {
+                    return 0;         // OK to deliver
+                } else {
+                    emsg = "550 Remote not configured to deliver for this address";
+                    return -1;
+                }
+            }
+        }
         // Check error addresses last
-        for ( int i=0; i<errors_rcpt_to_regex.size(); i++ )
-            if ( RegexMatch(errors_rcpt_to_regex[i].c_str(), address) == 1 ) // reject address configured?
-                { emsg = errors_rcpt_to_message[i]; return -1; }             // return error msg
+        for ( t=0; t<errors_rcpt_to_regex.size(); t++ )
+            if ( RegexMatch(errors_rcpt_to_regex[t].c_str(), address) == 1 ) // reject address configured?
+                { emsg = errors_rcpt_to_message[t]; return -1; }             // return error msg
         return 0;           // OK to deliver
     }
 
@@ -738,8 +745,8 @@ int GetRemoteHostInfo(FILE *fp) {
         sprintf(G_remoteip, "%.*s", int(sizeof(G_remoteip))-1, inet_ntoa(raddr.sin_addr));
         // Get remote Hostname string
         struct hostent *he;
-        if ( he = gethostbyaddr((struct addr_in*)&(raddr.sin_addr),
-                                sizeof(raddr.sin_addr), AF_INET) ) {
+        if ( ( he = gethostbyaddr((struct addr_in*)&(raddr.sin_addr),
+                                sizeof(raddr.sin_addr), AF_INET) ) ) {
             sprintf(G_remotehost, "%.*s", int(sizeof(G_remotehost))-1, he->h_name);
         } else {
             strcpy(G_remotehost, "???");
