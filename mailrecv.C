@@ -653,7 +653,7 @@ public:
             return -1;    // failed deadletter delivery? Tell remote we can't deliver
 
         Log("Mail from=%s to=%s [append to deadletter file '%s']",
-            mail_from, rcpt_to, deadletter_file);
+            mail_from, rcpt_to, deadletter_file.c_str());
         return 0;   // delivered
     }
 
