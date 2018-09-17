@@ -80,7 +80,7 @@ void DebugLog(const char *flags, const char *msg, ...) {
 void SMTP_Reply(const char *s) {
     printf("%s%s", s, CRLF);
     fflush(stdout);
-    DebugLog("s", "SMTP reply: %s\n", s);
+    DebugLog("s", "DEBUG: SMTP reply: %s\n", s);
 }
 
 // Do a regular expression match test
