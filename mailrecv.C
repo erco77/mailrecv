@@ -76,6 +76,13 @@ void DebugLog(const char *flags, const char *msg, ...) {
     }
 }
 
+// Handle sending a reply back to the server with added CRLF
+void SMTP_Reply(const char *s) {
+    printf("%s%s", s, CRLF);
+    fflush(stdout);
+    DebugLog("s", "SMTP reply: %s\n", s);
+}
+
 // Do a regular expression match test
 //
 //     regex[in] -- regular expression to match against string
@@ -619,7 +626,7 @@ public:
                 }
                 Log("'%s': remote server %s [%s] not allowed to send to this address",
                     rcpt_to, G_remotehost, G_remoteip);
-                printf("550 Server not allowed to send to this address%s", CRLF);
+                SMTP_Reply("550 Server not allowed to send to this address");
                 return -1;
             }
         }
@@ -638,7 +645,7 @@ public:
                 }
                 Log("'%s': remote server %s [%s] not allowed to send to this address",
                     rcpt_to, G_remotehost, G_remoteip);
-                printf("550 Server not allowed to send to this address%s",CRLF);
+                SMTP_Reply("550 Server not allowed to send to this address");
                 return -1;
             }
         }
@@ -827,8 +834,11 @@ int HandleSMTP() {
     const char *our_domain = G_conf.Domain();
 
     // We implement RFC 822 "HELO" protocol only.. no fancy EHLO stuff.
-    printf("220 %s SMTP (RFC 822)%s", our_domain, CRLF);    // TODO -- allow custom identity to be specified
-    fflush(stdout);
+    {
+        ostringstream os;
+        os << "220 " << our_domain << " SMTP (RFC 822)";    // TODO -- allow custom identity to be specified
+        SMTP_Reply(os.str().c_str());
+    }
 
     // Limit counters
     int smtp_commands_count = 0;
@@ -852,7 +862,7 @@ int HandleSMTP() {
         //
         if ( G_conf.CheckLimit(++smtp_commands_count, "smtp_commands", emsg) < 0 ) {
             Log("SMTP #commands limit reached (%d)", smtp_commands_count);
-            printf("%s\n", emsg.c_str());
+            SMTP_Reply(emsg.c_str());
             break;      // end session
         }
 
@@ -867,20 +877,30 @@ int HandleSMTP() {
 
         if ( ISCMD("QUIT") ) {
             quit = 1;
-            printf("221 %s closing connection%s", our_domain, CRLF);
+            ostringstream os;
+            os << "221 " << our_domain << " closing connection";
+            SMTP_Reply(os.str().c_str());
         } else if ( ISCMD("HELO") ) {
-            printf("250 %s Hello %s [%s]%s", our_domain, G_remotehost, G_remoteip, CRLF);
+            ostringstream os;
+            os << "250 " << our_domain << " Hello " << G_remotehost << " [" << G_remoteip << "]";
+            SMTP_Reply(os.str().c_str());
         } else if ( ISCMD("MAIL") ) {
             if ( ISARG1("FROM:")) {                         // "MAIL FROM: foo@bar.com"? (space after ":")
                 strcpy(mail_from, arg2);
-                printf("250 '%s': Sender ok%s", mail_from, CRLF);
+                ostringstream os;
+                os << "250 '" << mail_from << "': Sender ok";
+                SMTP_Reply(os.str().c_str());
             } else {
                 if ( strncasecmp(arg1,"FROM:", 5) == 0 ) {  // "MAIL FROM:foo@bar.com"? (NO space after ":")
                     strcpy(mail_from, arg1+5);              // get address after the ":"
-                    printf("250 '%s': Sender ok%s", mail_from, CRLF);
+                    ostringstream os;
+                    os << "250 '" << mail_from << "': Sender ok";
+                    SMTP_Reply(os.str().c_str());
                 } else {
                     ++smtp_fail_commands_count;
-                    printf("501 Unknown argument '%s'%s", arg1, CRLF);
+                    ostringstream os;
+                    os << "501 Unknown argument '" << arg1 << "'";
+                    SMTP_Reply(os.str().c_str());
                     Log("ERROR: unknown MAIL argument '%s'\n", arg1);
                 }
             }
@@ -897,31 +917,34 @@ rcpt_to:
                 // LIMIT CHECK: # RCPT TO COMMANDS
                 if ( G_conf.CheckLimit(++smtp_rcpt_to_count, "smtp_rcpt_to", emsg) < 0 ) {
                     Log("SMTP Number of 'rcpt to' recipients limit reached (%d)", smtp_rcpt_to_count);
-                    printf("%s\n", emsg.c_str());
+                    SMTP_Reply(emsg.c_str());
                     break;  // end session
                 }
                 if ( G_conf.CheckErrorAddress(address, emsg) < 0 ) {
                     ++smtp_fail_commands_count;
-                    printf("%s\n", emsg.c_str());              // Failed: send error, don't deliver
+                    SMTP_Reply(emsg.c_str());                  // Failed: send error, don't deliver
                 } else {
                     strcpy(rcpt_to, address);                  // Passed: ok to deliver
-                    printf("250 %s... recipient ok%s", rcpt_to, CRLF);
+                    ostringstream os;
+                    os << "250 " << rcpt_to << "... recipient ok";
+                    SMTP_Reply(os.str().c_str());
                 }
             } else {
                 ++smtp_fail_commands_count;
-                printf("501 Unknown RCPT argument '%s'%s", arg1, CRLF);
+                ostringstream os;
+                os << "501 Unknown RCPT argument '" << arg1 << "'";
+                SMTP_Reply(os.str().c_str());
                 Log("ERROR: unknown RCPT argument '%s'\n", arg1);
             }
         } else if ( ISCMD("DATA") ) {
             if ( rcpt_to[0] == 0 ) {
                 ++smtp_fail_commands_count;
-                printf("503 Bad sequence of commands -- missing RCPT TO%s", CRLF);
+                SMTP_Reply("503 Bad sequence of commands -- missing RCPT TO");
             } else if ( mail_from[0] == 0 ) {
                 ++smtp_fail_commands_count;
-                printf("503 Bad sequence of commands -- missing MAIL FROM%s", CRLF);
+                SMTP_Reply("503 Bad sequence of commands -- missing MAIL FROM");
             } else {
-                printf("354 Start mail input; end with <CRLF>.<CRLF>%s", CRLF);
-                fflush(stdout);
+                SMTP_Reply("354 Start mail input; end with <CRLF>.<CRLF>");
                 if ( ReadLetter(stdin, letter, emsg) == -1 ) {
                     ++smtp_fail_commands_count;
                     printf("%s\n", emsg.c_str());
@@ -929,12 +952,12 @@ rcpt_to:
                 }
                 if ( letter.size() < 3 ) {
                     // Even a one line email has more header lines than this
-                    printf("554 Message data was too short%s", CRLF);
+                    SMTP_Reply("554 Message data was too short");
                     ++smtp_fail_commands_count;
                 } else {
                     // Handle mail delivery
                     if ( G_conf.DeliverMail(mail_from, rcpt_to, letter) == 0 ) {
-                        printf("250 Message accepted for delivery%s", CRLF);
+                        SMTP_Reply("250 Message accepted for delivery");
                     } else {
                         ++smtp_fail_commands_count;
                     }
@@ -944,30 +967,30 @@ rcpt_to:
             mail_from[0] = 0;
             rcpt_to[0] = 0;
             letter.clear();
-            printf("250 OK%s", CRLF);
+            SMTP_Reply("250 OK");
         } else if ( ISCMD("NOOP") ) {
-            printf("250 OK%s", CRLF);
+            SMTP_Reply("250 OK");
         } else if ( ISCMD("HELP") ) {
-            printf("214 Help:%s", CRLF);
-            printf("    HELO, DATA, RSET, NOOP, QUIT,%s", CRLF);
-            printf("    MAIL FROM:,  RCPT TO:,%s", CRLF);
-            printf("    VRFY, EXPN, EHLO, SEND, SOML, SAML, TURN%s", CRLF);
+            SMTP_Reply("214-Help:");
+            SMTP_Reply("214-HELO, DATA, RSET, NOOP, QUIT,");
+            SMTP_Reply("214-MAIL FROM:,  RCPT TO:,");
+            SMTP_Reply("214 VRFY, EXPN, EHLO, SEND, SOML, SAML, TURN");
         } else if ( ISCMD("VRFY") || ISCMD("EXPN") ||
                     ISCMD("SEND") || ISCMD("SOML") ||
                     ISCMD("SAML") || ISCMD("TURN") ) {
             // COMMANDS WE DON'T SUPPORT
             ++smtp_fail_commands_count;
-            printf("502 Command not implemented or disabled%s", CRLF);
+            SMTP_Reply("502 Command not implemented or disabled");
             Log("ERROR: Remote tried '%s', we don't support it\n", cmd);
         } else {
             ++smtp_fail_commands_count;
-            printf("500 Unknown command%s", CRLF);
+            SMTP_Reply("500 Unknown command");
             Log("ERROR: Remote tried '%s', unknown command\n", cmd);
 
             // LIMIT CHECK: # UNKNOWN SMTP COMMANDS
             if ( G_conf.CheckLimit(++smtp_unknowncmd_count, "smtp_unknowncmd", emsg) < 0 ) {
                 Log("SMTP #unknown commands limit reached (%d)", smtp_unknowncmd_count);
-                printf("%s\n", emsg.c_str());
+                SMTP_Reply(emsg.c_str());
                 break;  // end session
             }
         }
@@ -978,7 +1001,7 @@ rcpt_to:
         // LIMIT CHECK: # UNKNOWN SMTP COMMANDS
         if ( G_conf.CheckLimit(smtp_fail_commands_count, "smtp_failcmds", emsg) < 0 ) {
             Log("SMTP #failed commands limit reached (%d)", smtp_fail_commands_count);
-            printf("%s\n", emsg.c_str());
+            SMTP_Reply(emsg.c_str());
             break;  // end session
         }
     }
@@ -1065,16 +1088,17 @@ int main(int argc, const char *argv[]) {
     // Load config file
     if ( G_conf.Load(conffile) < 0 ) {
         // Tell remote we can't receive SMTP at this time
-        printf("221 Cannot receive messages at this time.%s", CRLF);
-        fflush(stdout);
+        SMTP_Reply("221 Cannot receive messages at this time.");
         Log("ERROR: '%s' has errors (above): told remote 'Cannot receive email at this time'\n", conffile);
         return 1;       // fail
     }
 
     // Check if remote allowed to connect to us
     if ( ! G_conf.IsRemoteAllowed() ) {
-        printf("221 Cannot receive messages from %s [%s] at this time.%s", G_remotehost, G_remoteip, CRLF);
-        fflush(stdout);
+        ostringstream os;
+        os << "221 Cannot receive messages from " << G_remotehost
+           << " [" << G_remoteip << "] at this time.";
+        SMTP_Reply(os.str().c_str());
         Log("DENIED: Connection from %s [%s] not in allow_remotehost/ip lists\n", G_remotehost, G_remoteip);
         return 1;
     }
