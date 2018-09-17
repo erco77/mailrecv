@@ -39,6 +39,7 @@
 #include <pthread.h>    // pthread_create() for execution timer
 #include <string>
 #include <vector>
+#include <sstream>
 
 using namespace std;
 
@@ -201,22 +202,22 @@ class Configure {
     string limit_smtp_rcpt_to_emsg;    // limit on # "RCPT TO:" commands we can receive
 
     vector<AllowGroup> allowgroups;                 // "allow groups"
-    vector<string> deliver_rcpt_to_pipe_allowgroups;// hosts allowed to send to this address
+    vector<string> deliver_rcpt_to_pipe_allowgroups;// hosts allowed to send to this address (TODO: NOT YET IMPLEMENTED)
     vector<string> deliver_rcpt_to_pipe_address;    // configured rcpt_to addresses to pipe to a shell command (TODO: Should be regex instead?)
     vector<string> deliver_rcpt_to_pipe_command;    // rcpt_to shell command to pipe matching mail to address
 
-    vector<string> deliver_rcpt_to_file_allowgroups;// hosts allowed to send to this address
+    vector<string> deliver_rcpt_to_file_allowgroups;// hosts allowed to send to this address (TODO: NOT YET IMPLEMENTED)
     vector<string> deliver_rcpt_to_file_address;    // rcpt_to file addresses we allow (TODO: Should be regex instead?)
     vector<string> deliver_rcpt_to_file_filename;   // rcpt_to file filename we append letters to
 
+    //NO vector<string> errors_rcpt_to_allowgroups; // we don't need this; always OK to send remote an error ;)
     vector<string> errors_rcpt_to_regex;            // error address to match
     vector<string> errors_rcpt_to_message;          // error message to send remote on match
 
     vector<string> replace_rcpt_to_regex;           // rcpt_to regex to search for (TODO: NOT YET IMPLEMENTED)
     vector<string> replace_rcpt_to_after;           // rcpt_to regex match replacement string (TODO: NOT YET IMPLEMENTED)
 
-    vector<string> allow_remotehost_regex;          // allowed remotehost name regex
-    vector<string> allow_remoteip_regex;            // allowed remoteip address regex
+    vector<string> allow_remotehost_regex;          // allowed remotehost regex
 
 public:
     Configure() {
@@ -278,47 +279,71 @@ public:
         return -1;
     }
 
-    // Find the allowgroup 'name'.
-    //    If found, check the remote's hostname/ip against all regex patterns in this AllowGroup;
-    //
+    // See if 'regex' matches remote hostname/ip 's'
     // Returns:
-    //    0 -- Remote host is allowed
-    //   -1 -- Remote host is not allowed
-    //   -2 -- allowgroup 'name' was not found
+    //     1 -- match
+    //     0 -- no match
     //
-    int CheckAllowGroup(const string& name, const char *remotehost, const char *remoteip) {
-        int found = 0;
-        for ( int t=0; t<allowgroups.size(); t++ ) {
-            AllowGroup &agroup = allowgroups[t];
-            if ( agroup.name != name ) continue;
-            // Found group?
-            //    Check remote host against all regexes in this group
-            //
-            found = 1;
-            for ( int i=0; i<agroup.regexes.size(); i++ ) {
-                const char *regex = agroup.regexes[i].c_str();
-
-                // Check remote hostname
-                ISLOG("r")
-                    { Log("DEBUG: Checking '%s' against '%s'..\n", regex, remotehost); }
-                if ( RegexMatch(regex, remotehost) == 1 ) {
-                    ISLOG("r") { Log("DEBUG:     Matched!\n"); }
-                    return 0;   // match
-                }
-                ISLOG("r") { Log("DEBUG:     No match.\n"); }
-
-                // Check remote IP
-                ISLOG("r")
-                    { Log("DEBUG: Checking '%s' against '%s'..\n", regex, remoteip); }
-                if ( RegexMatch(regex, remoteip) == 1 ) {
-                    ISLOG("r") { Log("DEBUG:     Matched!\n"); }
-                    return 0;   // match
-                }
-                ISLOG("r") { Log("DEBUG:     No match.\n"); }
-            }
+    int IsMatch(const char *regex, const char *s) {
+        ostringstream logmsg;
+        ISLOG("r") { logmsg << "DEBUG: Checking '" << s << "' ~= '" << regex << "': "; }
+        if ( RegexMatch(regex, s) == 1 ) {
+            ISLOG("r") { logmsg << "Matched!"; Log("%s", logmsg.str().c_str()); }
+            return 1;   // match
         }
-        // Got here, didn't find any matches
-        return found ? -1 : -2;
+        ISLOG("r") { logmsg << "no match."; Log("%s", logmsg.str().c_str()); }
+        return 0;
+    }
+
+    // See if remote host/ip allowed by specified regex
+    // Returns:
+    //     1 -- Remote is allowed
+    //     0 -- Remote is NOT allowed
+    //
+    int IsRemoteAllowed(const char *regex) {
+        if ( IsMatch(regex, G_remotehost) ) return 1;    // match? allowed
+        if ( IsMatch(regex, G_remoteip  ) ) return 1;    // match? allowed
+        return 0; // no match? not allowed
+    }
+
+    // See if remote allowed by global allow
+    // Returns:
+    //     1 -- Remote is allowed
+    //     0 -- Remote is NOT allowed
+    //
+    int IsRemoteAllowed() {
+        // Nothing configured? Allow anyone
+        if ( allow_remotehost_regex.size() == 0 ) {
+            ISLOG("w") { Log("NOTE: All remotes allowed by default"); }
+            return 1;
+        } else {
+            // If one or both configured, must have at least one match
+            for ( size_t t=0; t<allow_remotehost_regex.size(); t++ )
+                if ( IsRemoteAllowed(allow_remotehost_regex[t].c_str() ) )
+                    return 1;   // match? allowed
+            return 0;           // no match? not allowed
+        }
+    }
+
+    // See if remote host is allowed by group.
+    // Returns:
+    //    1 -- Remote host is allowed by the group
+    //    0 -- Remote host is not allowed
+    //
+    int IsRemoteAllowedByGroup(const string& groupname) {
+        if ( groupname == "*" ) return 1;                       // '*' means always allow
+        for ( int t=0; t<allowgroups.size(); t++ ) {            // find the group..
+            AllowGroup &ag = allowgroups[t];
+            if ( ag.name != groupname ) continue;               // no match, keep looking
+            for ( int i=0; i<ag.regexes.size(); i++ )           // found group, check remote against all regexes in group
+                if ( IsRemoteAllowed(ag.regexes[i].c_str()) )   // check remote hostname/ip
+                    return 1;   // match found!
+            return 0;           // no match; not allowed
+        }
+        // Didn't find allowgroup -- admin config error!
+        Log("ERROR: group '%s' is referenced but not defined (fix your mailrecv.conf!)",
+            groupname.c_str());
+        return 0;
     }
 
     // Add allow group definition
@@ -347,7 +372,16 @@ public:
         AllowGroup agroup;
         agroup.name = name;
         agroup.regexes.push_back(regex);
+        allowgroups.push_back(agroup);
         return 0;
+    }
+
+    // See if allowgroup is defined
+    int IsAllowGroupDefined(const char *groupname) {
+        for ( int i=0; i<allowgroups.size(); i++ )
+            if ( allowgroups[i].name == groupname )
+                return 1; // yep
+        return -1;  // nope
     }
 
     // Load the specified config file
@@ -446,6 +480,11 @@ public:
                 deliver_rcpt_to_file_address.push_back(arg1);
                 deliver_rcpt_to_file_filename.push_back(arg2);
             } else if ( sscanf(line, "deliver allowgroup %s rcpt_to %s append %s", arg1, arg2, arg3) == 3 ) {
+                if ( IsAllowGroupDefined(arg1) < 0 ) {
+                    Log("ERROR: '%s' (LINE %d): allowgroup '%s' is undefined", conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
                 deliver_rcpt_to_file_allowgroups.push_back(arg1);
                 deliver_rcpt_to_file_address.push_back(arg2);
                 deliver_rcpt_to_file_filename.push_back(arg3);
@@ -454,6 +493,11 @@ public:
                 deliver_rcpt_to_pipe_address.push_back(arg1);
                 deliver_rcpt_to_pipe_command.push_back(arg2);
             } else if ( sscanf(line, "deliver allowgroup %s rcpt_to %s pipe %[^\n]", arg1, arg2, arg3) == 3 ) {
+                if ( IsAllowGroupDefined(arg1) < 0 ) {
+                    Log("ERROR: '%s' (LINE %d): allowgroup '%s' is undefined", conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
                 deliver_rcpt_to_pipe_allowgroups.push_back(arg1);
                 deliver_rcpt_to_pipe_address.push_back(arg2);
                 deliver_rcpt_to_pipe_command.push_back(arg3);
@@ -487,13 +531,6 @@ public:
                     err = -1;
                 }
                 allow_remotehost_regex.push_back(arg1);
-            } else if ( sscanf(line, "allow remoteip %s", arg1) == 1 ) {
-                // Make sure regex compiles..
-                if ( RegexMatch(arg1, "x") == -1 ) {
-                    Log("ERROR: '%s' (LINE %d): bad 'allow remoteip' regex '%s'\n", conffile, linenum, arg1);
-                    err = -1;
-                }
-                allow_remoteip_regex.push_back(arg1);
             } else {
                 Log("ERROR: '%s' (LINE %d): ignoring unknown config command: %s\n", conffile, linenum, line);
                 err = -1;
@@ -508,88 +545,44 @@ public:
             Log("DEBUG:    maxsecs: %d\n", MaxSecs());
             Log("DEBUG:    domain: '%s'\n", Domain());
             Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
-
-            Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
-            Log("DEBUG:    limit_smtp_commands        max=%ld msg=%s\n", limit_smtp_commands,   limit_smtp_commands_emsg.c_str());
-            Log("DEBUG:    limit_smtp_unknowncmd      max=%ld msg=%s\n", limit_smtp_unknowncmd, limit_smtp_unknowncmd_emsg.c_str());
-            Log("DEBUG:    limit_smtp_failcmds        max=%ld msg=%s\n", limit_smtp_failcmds,   limit_smtp_failcmds_emsg.c_str());
-            Log("DEBUG:    limit_connection_secs      max=%ld msg=%s\n", limit_connection_secs, limit_connection_secs_emsg.c_str());
-            Log("DEBUG:    limit_smtp_data_size       max=%ld msg=%s\n", limit_smtp_data_size,  limit_smtp_data_size_emsg.c_str());
-            Log("DEBUG:    limit_smtp_rcpt_to         max=%ld msg=%s\n", limit_smtp_rcpt_to,    limit_smtp_rcpt_to_emsg.c_str());
+            Log("DEBUG:    limit_smtp_commands    max=%ld msg=%s\n", limit_smtp_commands,   limit_smtp_commands_emsg.c_str());
+            Log("DEBUG:    limit_smtp_unknowncmd  max=%ld msg=%s\n", limit_smtp_unknowncmd, limit_smtp_unknowncmd_emsg.c_str());
+            Log("DEBUG:    limit_smtp_failcmds    max=%ld msg=%s\n", limit_smtp_failcmds,   limit_smtp_failcmds_emsg.c_str());
+            Log("DEBUG:    limit_connection_secs  max=%ld msg=%s\n", limit_connection_secs, limit_connection_secs_emsg.c_str());
+            Log("DEBUG:    limit_smtp_data_size   max=%ld msg=%s\n", limit_smtp_data_size,  limit_smtp_data_size_emsg.c_str());
+            Log("DEBUG:    limit_smtp_rcpt_to     max=%ld msg=%s\n", limit_smtp_rcpt_to,    limit_smtp_rcpt_to_emsg.c_str());
 
             size_t t;
+            // Allowgroups..
+            for ( t=0; t<allowgroups.size(); t++ ) {
+                ostringstream os;
+                AllowGroup &ag = allowgroups[t];
+                os << "DEBUG:    allowgroup '" << ag.name << "': ";
+                for ( int i=0; i<ag.regexes.size(); i++ )
+                    { os << (i>0?", ":"") << "'" << ag.regexes[i] << "'"; }
+                Log("%s\n", os.str().c_str());
+            }
+            // deliver to file..
             for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
                 Log("DEBUG:    deliver rcpt_to: allowgroup='%s' address='%s', which writes to file='%s'\n",
                     deliver_rcpt_to_file_allowgroups[t].c_str(),
                     deliver_rcpt_to_file_address[t].c_str(),
                     deliver_rcpt_to_file_filename[t].c_str());
             }
+            // deliver to pipe..
             for ( t=0; t<deliver_rcpt_to_pipe_address.size(); t++ ) {
                 Log("DEBUG:    deliver rcpt_to: allowgroup='%s' address='%s', which pipes to cmd='%s'\n",
                     deliver_rcpt_to_pipe_allowgroups[t].c_str(),
                     deliver_rcpt_to_pipe_address[t].c_str(),
                     deliver_rcpt_to_pipe_command[t].c_str());
             }
+            // global allow remotes..
             for ( t=0; t<allow_remotehost_regex.size(); t++ ) {
                 Log("DEBUG:    allow remote hostnames that match perl regex '%s'\n", allow_remotehost_regex[t].c_str());
-            }
-            for ( t=0; t<allow_remoteip_regex.size(); t++ ) {
-                Log("DEBUG:    allow remote IP addresses that match perl regex '%s'\n", allow_remoteip_regex[t].c_str());
             }
             Log("DEBUG: ---\n");
         }
         return err;     // let caller decide what to do
-    }
-
-    // See if remotehost/remoteip are allowed to connect to us
-    //     Checks if any 'allow remotehost/remoteip ..' commands were configured,
-    //     and if so, do match checks.
-    //
-    // Returns:
-    //     0 -- Remote is allowed
-    //    -1 -- Remote is NOT allowed
-    //
-    int CheckRemote(const char *remotehost,     // remote's hostname
-                    const char *remoteip) {     // remote's IP address string
-        // Nothing configured? Allow anyone
-        if ( allow_remotehost_regex.size() == 0 &&
-             allow_remoteip_regex.size()   == 0 ) {
-            ISLOG("r") {
-                Log("DEBUG: There are no checks configured for remotehost/remoteip"
-                                " (allowing anyone to connect)\n");
-            }
-            return 0;
-        }
-
-        // If one or both configured, must have at least one match
-
-        // See if remote hostname allowed to connect to us
-        for ( size_t t=0; t<allow_remotehost_regex.size(); t++ ) {
-            ISLOG("r") {
-                Log("DEBUG: Checking '%s' against '%s'..\n",
-                    allow_remotehost_regex[t].c_str(), remotehost);
-            }
-            if ( RegexMatch(allow_remotehost_regex[t].c_str(), remotehost) == 1 ) {
-                ISLOG("r") { Log("DEBUG:     Matched!\n"); }
-                return 0;   // match
-            }
-            ISLOG("r") { Log("DEBUG:     No match.\n"); }
-        }
-
-        // Check if remote IP allowed to connect to us
-        for ( size_t t=0; t<allow_remoteip_regex.size(); t++ ) {
-            ISLOG("r") {
-                Log("DEBUG: Checking '%s' against '%s'..\n",
-                    allow_remoteip_regex[t].c_str(), remoteip);
-            }
-            if ( RegexMatch(allow_remoteip_regex[t].c_str(), remoteip) == 1 ) {
-                ISLOG("r") { Log("DEBUG:     Matched!\n"); }
-                return 0;   // match
-            }
-            ISLOG("r") { Log("DEBUG:     No match.!\n"); }
-        }
-
-        return -1;          // No match? Failed
     }
 
     // Deliver mail to recipient.
@@ -606,33 +599,38 @@ public:
 
         // Check for 'append to file' recipient..
         for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
+            const string& groupname = deliver_rcpt_to_file_allowgroups[t];
             if ( strcmp(rcpt_to, deliver_rcpt_to_file_address[t].c_str()) == 0 ) {
-                // Check allowgroup ('*' matches everything)
-                if ( deliver_rcpt_to_file_allowgroups[t] != "*" &&
-                     CheckAllowGroup(deliver_rcpt_to_file_allowgroups[t], G_remotehost, G_remoteip) < 0 ) {
-                   Log("'%s': remote server %s[%s] not allowed to send to this address", rcpt_to, G_remotehost, G_remoteip);
-                   printf("550 Server not allowed to send to this address%s", CRLF);
-                   return -1;
+                if ( IsRemoteAllowedByGroup(groupname) ) {
+                    // TODO: Check error return of AppendMailToFile(), fall thru to deadletter?
+                    AppendMailToFile(mail_from, rcpt_to, letter, deliver_rcpt_to_file_filename[t]);
+                    Log("Mail from=%s to=%s [append to '%s']", 
+                         mail_from, rcpt_to, deliver_rcpt_to_file_filename[t].c_str());
+                    return 0;   // delivered
                 }
-                // TODO: Check error return of AppendMailToFile(), fall thru to deadletter?
-                AppendMailToFile(mail_from, rcpt_to, letter, deliver_rcpt_to_file_filename[t]);
-                return 0;   // delivered
+                Log("'%s': remote server %s [%s] not allowed to send to this address",
+                    rcpt_to, G_remotehost, G_remoteip);
+                printf("550 Server not allowed to send to this address%s", CRLF);
+                return -1;
             }
         }
 
         // Check for 'pipe to command' recipient..
         for ( t=0; t<deliver_rcpt_to_pipe_address.size(); t++ ) {
+            const string& groupname = deliver_rcpt_to_pipe_allowgroups[t];
             if ( strcmp(rcpt_to, deliver_rcpt_to_pipe_address[t].c_str()) == 0 ) {
                 // Check allowgroup ('*' matches everything)
-                if ( deliver_rcpt_to_pipe_allowgroups[t] != "*" &&
-                     CheckAllowGroup(deliver_rcpt_to_pipe_allowgroups[t], G_remotehost, G_remoteip) < 0 ) {
-                   Log("'%s': remote server %s[%s] not allowed to send to this address", rcpt_to, G_remotehost, G_remoteip);
-                   printf("550 Server not allowed to send to this address%s",CRLF);
-                   return -1;
+                if ( IsRemoteAllowedByGroup(groupname) ) {
+                    // TODO: Check error return of PipeMailToCommand(), fall thru to deadletter?
+                    PipeMailToCommand(mail_from, rcpt_to, letter, deliver_rcpt_to_pipe_command[t]);
+                    Log("Mail from=%s to=%s [pipe to '%s']", 
+                         mail_from, rcpt_to, deliver_rcpt_to_pipe_command[t].c_str());
+                    return 0;   // delivered
                 }
-                // TODO: Check error return of PipeMailToCommand(), fall thru to deadletter?
-                PipeMailToCommand(mail_from, rcpt_to, letter, deliver_rcpt_to_pipe_command[t]);
-                return 0;   // delivered
+                Log("'%s': remote server %s [%s] not allowed to send to this address",
+                    rcpt_to, G_remotehost, G_remoteip);
+                printf("550 Server not allowed to send to this address%s",CRLF);
+                return -1;
             }
         }
 
@@ -645,37 +643,39 @@ public:
         if ( AppendMailToFile(mail_from, rcpt_to, letter, deadletter_file) < 0 )
             return -1;    // failed deadletter delivery? Tell remote we can't deliver
 
+        Log("Mail from=%s to=%s [append to deadletter file '%s']",
+            mail_from, rcpt_to, deadletter_file);
         return 0;   // delivered
     }
 
-    // See if address is an error address
+    // See if address is an error address, or if server not allowed
     //
     // Returns:
     //    0 -- OK to deliver -- not an error address
-    //   -1 -- Error address -- caller should send 'emsg' to remote, and skip delivery
+    //   -1 -- Reject delivery -- send error message in 'emsg' to remote
     //
     int CheckErrorAddress(const char *address, string& emsg) {
-        // First, ignore address if it's already /configured/ to receive
-        {
-            // rcpt_to file?
-            for ( int t=0; t<deliver_rcpt_to_file_address.size(); t++ )
-                if ( strcmp(address, deliver_rcpt_to_file_address[t].c_str()) == 0 )
-                    return 0;       // OK to deliver
-        }
-        {
-            // rcpt_to pipe?
-            for ( int t=0; t<deliver_rcpt_to_pipe_address.size(); t++ )
-                if ( strcmp(address, deliver_rcpt_to_pipe_address[t].c_str()) == 0 )
-                    return 0;       // OK to deliver
-        }
+        int t;
+        // First, ignore address configured for regular delivery..
+        // ..rcpt_to file?
+        for ( int t=0; t<deliver_rcpt_to_file_address.size(); t++ )
+            if ( strcmp(address, deliver_rcpt_to_file_address[t].c_str()) == 0 )
+                if ( IsRemoteAllowedByGroup(deliver_rcpt_to_file_allowgroups[t].c_str()) )
+                    { return 0; }     // OK to deliver
+                else
+                    { emsg = "550 Remote not configured to deliver for this address"; return -1; }
+        // ..rcpt_to pipe?
+        for ( int t=0; t<deliver_rcpt_to_pipe_address.size(); t++ )
+            if ( strcmp(address, deliver_rcpt_to_pipe_address[t].c_str()) == 0 )
+                if ( IsRemoteAllowedByGroup(deliver_rcpt_to_pipe_allowgroups[t].c_str()) )
+                    { return 0; }     // OK to deliver
+                else
+                    { emsg = "550 Remote not configured to deliver for this address"; return -1; }
 
         // Check error addresses last
-        for ( int i=0; i<errors_rcpt_to_regex.size(); i++ ) {
-            if ( RegexMatch(errors_rcpt_to_regex[i].c_str(), address) == 1 ) {
-                emsg = errors_rcpt_to_message[i];
-                return -1;  // NOT OK to deliver -- emsg has error to send remote
-            }
-        }
+        for ( int i=0; i<errors_rcpt_to_regex.size(); i++ )
+            if ( RegexMatch(errors_rcpt_to_regex[i].c_str(), address) == 1 ) // reject address configured?
+                { emsg = errors_rcpt_to_message[i]; return -1; }             // return error msg
         return 0;           // OK to deliver
     }
 
@@ -727,7 +727,6 @@ int GetRemoteHostInfo(FILE *fp) {
     if ( getpeername(fileno(fp), (struct sockaddr*)&raddr, &raddr_size) == 0 ) {
         // Get remote IP address string
         sprintf(G_remoteip, "%.*s", int(sizeof(G_remoteip))-1, inet_ntoa(raddr.sin_addr));
-
         // Get remote Hostname string
         struct hostent *he;
         if ( he = gethostbyaddr((struct addr_in*)&(raddr.sin_addr),
@@ -797,6 +796,10 @@ int ReadLetter(FILE *fp,                    // [in] connection to remote
 }
 
 // Handle a complete SMTP session with the remote on stdin/stdout
+// Returns main() exit code:
+//     0 -- success
+//     1 -- failure
+//
 int HandleSMTP() {
     vector<string> letter;              // array for received email (SMTP "DATA")
     char line[LINE_LEN+1],              // raw line buffer
@@ -808,7 +811,7 @@ int HandleSMTP() {
     const char *our_domain = G_conf.Domain();
 
     // We implement RFC 822 "HELO" protocol only.. no fancy EHLO stuff.
-    printf("220 %s SMTP (RFC 822) mailrecv%s", our_domain, CRLF);
+    printf("220 %s SMTP (RFC 822)%s", our_domain, CRLF);    // TODO -- allow custom identity to be specified
     fflush(stdout);
 
     // Limit counters
@@ -1048,13 +1051,12 @@ int main(int argc, const char *argv[]) {
         // Tell remote we can't receive SMTP at this time
         printf("221 Cannot receive messages at this time.%s", CRLF);
         fflush(stdout);
-        Log("ERROR: Config file has errors (above): "
-            "told remote we can't receive emails at this time\n");
+        Log("ERROR: '%s' has errors (above): told remote 'Cannot receive email at this time'\n", conffile);
         return 1;       // fail
     }
 
     // Check if remote allowed to connect to us
-    if ( G_conf.CheckRemote(G_remotehost, G_remoteip) < 0 ) {
+    if ( ! G_conf.IsRemoteAllowed() ) {
         printf("221 Cannot receive messages from %s [%s] at this time.%s", G_remotehost, G_remoteip, CRLF);
         fflush(stdout);
         Log("DENIED: Connection from %s [%s] not in allow_remotehost/ip lists\n", G_remotehost, G_remoteip);
