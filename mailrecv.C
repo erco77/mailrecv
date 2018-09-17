@@ -49,19 +49,10 @@ using namespace std;
 // Check for log flags
 #define ISLOG(s) if (G_debugflags[0] && (G_debugflags[0]=='a'||strpbrk(G_debugflags, s)))
 
-// Log flags.
-//    Can be one or more of these single letter flags.
-//    An empty string disables all optional logging.
-//
-//    a -- all (enables all optional flags)
-//    c -- show config file loading process
-//    s -- SMTP commands
-//    l -- show letter as it's received
-//    r -- show regex pattern match checks
-//    f -- show file/pipe open/save/close
-//    w -- log non-essential warnings
-//
-const char *G_debugflags = "";
+///// GLOBALS /////
+const char *G_debugflags = "";         // debug logging flags (see mailrecv.conf for description)
+char        G_remotehost[256];         // Remote's hostname
+char        G_remoteip[80];            // Remote's IP address
 
 // Log a message...
 //     In addition to the usual printf() behavior, %m is replaced with strerror(errno)
@@ -179,6 +170,12 @@ void RemoveAngleBrackets(char* address) {
     *address++ = 0;
 }
 
+// Class to manage a group of regex patterns
+struct AllowGroup {
+    string name;                // group name, e.g. "+aservers"
+    vector<string> regexes;     // array of regex patterns to match (e.g. "mail[1234].server.com")
+};
+
 // mailrecv's configuration file class
 //     TODO: This should be moved to a separate file.
 //
@@ -203,9 +200,12 @@ class Configure {
     string limit_smtp_data_size_emsg;  // limit on #bytes DATA command can receive
     string limit_smtp_rcpt_to_emsg;    // limit on # "RCPT TO:" commands we can receive
 
+    vector<AllowGroup> allowgroups;                 // "allow groups"
+    vector<string> deliver_rcpt_to_pipe_allowgroups;// hosts allowed to send to this address
     vector<string> deliver_rcpt_to_pipe_address;    // configured rcpt_to addresses to pipe to a shell command (TODO: Should be regex instead?)
     vector<string> deliver_rcpt_to_pipe_command;    // rcpt_to shell command to pipe matching mail to address
 
+    vector<string> deliver_rcpt_to_file_allowgroups;// hosts allowed to send to this address
     vector<string> deliver_rcpt_to_file_address;    // rcpt_to file addresses we allow (TODO: Should be regex instead?)
     vector<string> deliver_rcpt_to_file_filename;   // rcpt_to file filename we append letters to
 
@@ -278,6 +278,78 @@ public:
         return -1;
     }
 
+    // Find the allowgroup 'name'.
+    //    If found, check the remote's hostname/ip against all regex patterns in this AllowGroup;
+    //
+    // Returns:
+    //    0 -- Remote host is allowed
+    //   -1 -- Remote host is not allowed
+    //   -2 -- allowgroup 'name' was not found
+    //
+    int CheckAllowGroup(const string& name, const char *remotehost, const char *remoteip) {
+        int found = 0;
+        for ( int t=0; t<allowgroups.size(); t++ ) {
+            AllowGroup &agroup = allowgroups[t];
+            if ( agroup.name != name ) continue;
+            // Found group?
+            //    Check remote host against all regexes in this group
+            //
+            found = 1;
+            for ( int i=0; i<agroup.regexes.size(); i++ ) {
+                const char *regex = agroup.regexes[i].c_str();
+
+                // Check remote hostname
+                ISLOG("r")
+                    { Log("DEBUG: Checking '%s' against '%s'..\n", regex, remotehost); }
+                if ( RegexMatch(regex, remotehost) == 1 ) {
+                    ISLOG("r") { Log("DEBUG:     Matched!\n"); }
+                    return 0;   // match
+                }
+                ISLOG("r") { Log("DEBUG:     No match.\n"); }
+
+                // Check remote IP
+                ISLOG("r")
+                    { Log("DEBUG: Checking '%s' against '%s'..\n", regex, remoteip); }
+                if ( RegexMatch(regex, remoteip) == 1 ) {
+                    ISLOG("r") { Log("DEBUG:     Matched!\n"); }
+                    return 0;   // match
+                }
+                ISLOG("r") { Log("DEBUG:     No match.\n"); }
+            }
+        }
+        // Got here, didn't find any matches
+        return found ? -1 : -2;
+    }
+
+    // Add allow group definition
+    //    If name exists, add regex to that allowgroup.
+    //    If name doesn't exist, add a new AllowGroup with that name+regex
+    //
+    // Returns:
+    //     0 on success
+    //    -1 on error (emsg has reason)
+    //
+    int AddAllowGroup(const char *name, const char *regex, string& emsg) {
+        // Make sure regex compiles..
+        if ( RegexMatch(regex, "x") == -1 ) {
+            emsg = string("'") + string(regex) + "': bad perl regular expression";
+            return -1;
+        }
+        // See if group name exists. If so, append regex, done.
+        for ( int i=0; i<allowgroups.size(); i++ ) {
+            AllowGroup &agroup = allowgroups[i];
+            if ( agroup.name == name ) {
+                agroup.regexes.push_back(regex); // append to existing
+                return 0;                        // done
+            }
+        }
+        // Not found? Create new..
+        AllowGroup agroup;
+        agroup.name = name;
+        agroup.regexes.push_back(regex);
+        return 0;
+    }
+
     // Load the specified config file
     //     Returns 0 on success, -1 on error (reason printed on stderr)
     //
@@ -289,7 +361,7 @@ public:
             Log("ERROR: can't open %s: %m\n", conffile);
             return -1;
         }
-        char line[LINE_LEN+1], arg1[LINE_LEN+1], arg2[LINE_LEN+1];
+        char line[LINE_LEN+1], arg1[LINE_LEN+1], arg2[LINE_LEN+1], arg3[LINE_LEN+1];
         int linenum = 0;
         while ( fgets(line, LINE_LEN, fp) != NULL ) {
             // Keep count of lines
@@ -362,12 +434,29 @@ public:
                 limit_smtp_rcpt_to_emsg = arg2;
             } else if ( sscanf(line, "deadletter_file %s", arg1) == 1 ) {
                 deadletter_file = arg1;
+            } else if ( sscanf(line, "allowgroup %s %s", arg1, arg2) == 2 ) {
+                string emsg;
+                if ( AddAllowGroup(arg1, arg2, emsg) < 0 ) {
+                    Log("ERROR: '%s' (LINE %d): %s", conffile, linenum, emsg.c_str());
+                    err = -1;
+                    continue;
+                }
             } else if ( sscanf(line, "deliver rcpt_to %s append %s", arg1, arg2) == 2 ) {
+                deliver_rcpt_to_file_allowgroups.push_back("*");
                 deliver_rcpt_to_file_address.push_back(arg1);
                 deliver_rcpt_to_file_filename.push_back(arg2);
+            } else if ( sscanf(line, "deliver allowgroup %s rcpt_to %s append %s", arg1, arg2, arg3) == 3 ) {
+                deliver_rcpt_to_file_allowgroups.push_back(arg1);
+                deliver_rcpt_to_file_address.push_back(arg2);
+                deliver_rcpt_to_file_filename.push_back(arg3);
             } else if ( sscanf(line, "deliver rcpt_to %s pipe %[^\n]", arg1, arg2) == 2 ) {
+                deliver_rcpt_to_pipe_allowgroups.push_back("*");
                 deliver_rcpt_to_pipe_address.push_back(arg1);
                 deliver_rcpt_to_pipe_command.push_back(arg2);
+            } else if ( sscanf(line, "deliver allowgroup %s rcpt_to %s pipe %[^\n]", arg1, arg2, arg3) == 3 ) {
+                deliver_rcpt_to_pipe_allowgroups.push_back(arg1);
+                deliver_rcpt_to_pipe_address.push_back(arg2);
+                deliver_rcpt_to_pipe_command.push_back(arg3);
             } else if ( sscanf(line, "error rcpt_to %s %[^\n]", arg1, arg2) == 2 ) {
                 int ecode;
                 // Make sure error message includes 3 digit SMTP error code
@@ -430,12 +519,14 @@ public:
 
             size_t t;
             for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
-                Log("DEBUG:    deliver rcpt_to: address='%s', which writes to file='%s'\n",
+                Log("DEBUG:    deliver rcpt_to: allowgroup='%s' address='%s', which writes to file='%s'\n",
+                    deliver_rcpt_to_file_allowgroups[t].c_str(),
                     deliver_rcpt_to_file_address[t].c_str(),
                     deliver_rcpt_to_file_filename[t].c_str());
             }
             for ( t=0; t<deliver_rcpt_to_pipe_address.size(); t++ ) {
-                Log("DEBUG:    deliver rcpt_to: address='%s', which pipes to cmd='%s'\n",
+                Log("DEBUG:    deliver rcpt_to: allowgroup='%s' address='%s', which pipes to cmd='%s'\n",
+                    deliver_rcpt_to_pipe_allowgroups[t].c_str(),
                     deliver_rcpt_to_pipe_address[t].c_str(),
                     deliver_rcpt_to_pipe_command[t].c_str());
             }
@@ -505,8 +596,8 @@ public:
     //     If there's no configured recipient, write to deadletter file.
     //
     // Returns:
-    //     1 on success
-    //    -1 on error (reason printed to stderr).
+    //     0 on success
+    //    -1 on error (reason sent to server on stdout).
     //
     int DeliverMail(const char* mail_from,          // SMTP 'mail from:'
                     const char *rcpt_to,            // SMTP 'rcpt to:'
@@ -516,18 +607,32 @@ public:
         // Check for 'append to file' recipient..
         for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
             if ( strcmp(rcpt_to, deliver_rcpt_to_file_address[t].c_str()) == 0 ) {
+                // Check allowgroup ('*' matches everything)
+                if ( deliver_rcpt_to_file_allowgroups[t] != "*" &&
+                     CheckAllowGroup(deliver_rcpt_to_file_allowgroups[t], G_remotehost, G_remoteip) < 0 ) {
+                   Log("'%s': remote server %s[%s] not allowed to send to this address", rcpt_to, G_remotehost, G_remoteip);
+                   printf("550 Server not allowed to send to this address%s", CRLF);
+                   return -1;
+                }
                 // TODO: Check error return of AppendMailToFile(), fall thru to deadletter?
                 AppendMailToFile(mail_from, rcpt_to, letter, deliver_rcpt_to_file_filename[t]);
-                return 1;   // delivered
+                return 0;   // delivered
             }
         }
 
         // Check for 'pipe to command' recipient..
         for ( t=0; t<deliver_rcpt_to_pipe_address.size(); t++ ) {
             if ( strcmp(rcpt_to, deliver_rcpt_to_pipe_address[t].c_str()) == 0 ) {
+                // Check allowgroup ('*' matches everything)
+                if ( deliver_rcpt_to_pipe_allowgroups[t] != "*" &&
+                     CheckAllowGroup(deliver_rcpt_to_pipe_allowgroups[t], G_remotehost, G_remoteip) < 0 ) {
+                   Log("'%s': remote server %s[%s] not allowed to send to this address", rcpt_to, G_remotehost, G_remoteip);
+                   printf("550 Server not allowed to send to this address%s",CRLF);
+                   return -1;
+                }
                 // TODO: Check error return of PipeMailToCommand(), fall thru to deadletter?
                 PipeMailToCommand(mail_from, rcpt_to, letter, deliver_rcpt_to_pipe_command[t]);
-                return 1;   // delivered
+                return 0;   // delivered
             }
         }
 
@@ -540,7 +645,7 @@ public:
         if ( AppendMailToFile(mail_from, rcpt_to, letter, deadletter_file) < 0 )
             return -1;    // failed deadletter delivery? Tell remote we can't deliver
 
-        return 1;   // delivered
+        return 0;   // delivered
     }
 
     // See if address is an error address
@@ -602,10 +707,6 @@ Configure G_conf;
 
 // Minimum commands we must support:
 //      HELO MAIL RCPT DATA RSET NOOP QUIT VRFY
-
-// Remote's hostname + ip address
-char G_remotehost[256];
-char G_remoteip[80];
 
 // Return with remote's ip address + hostname in globals
 //    Sets globals: G_remotehost, G_remoteip
@@ -707,7 +808,7 @@ int HandleSMTP() {
     const char *our_domain = G_conf.Domain();
 
     // We implement RFC 822 "HELO" protocol only.. no fancy EHLO stuff.
-    printf("220 %s SMTP (RFC 822) mailrecv\n", our_domain);
+    printf("220 %s SMTP (RFC 822) mailrecv%s", our_domain, CRLF);
     fflush(stdout);
 
     // Limit counters
@@ -813,13 +914,11 @@ rcpt_to:
                     ++smtp_fail_commands_count;
                 } else {
                     // Handle mail delivery
-                    G_conf.DeliverMail(mail_from, rcpt_to, letter);
-                    // TODO: Check error return of DeliverMail(), on failure
-                    // TODO: log error and either (a) tell remote an error occurred
-                    // TODO: and drop msg, or (b) append to dead_letter and let remote
-                    // TODO: think it was delivered.
-                    //
-                    printf("250 Message accepted for delivery%s", CRLF);
+                    if ( G_conf.DeliverMail(mail_from, rcpt_to, letter) == 0 ) {
+                        printf("250 Message accepted for delivery%s", CRLF);
+                    } else {
+                        ++smtp_fail_commands_count;
+                    }
                 }
             }
         } else if ( ISCMD("RSET") ) {
@@ -884,8 +983,22 @@ void HelpAndExit() {
           "        See LICENSE file packaged with newsd for license/copyright info.\n"
           "\n"
           "Options\n"
-          "    -c config-file     -- use 'config-file' instead of default (" CONFIG_FILE ")\n"
-          "    -d                 -- enable debugging messages on stderr\n"
+          "    -c config-file     -- Use 'config-file' instead of default (" CONFIG_FILE ")\n"
+          "    -d <logflags|->    -- Enable debugging logging flags.\n"
+          "\n"
+          "Log Flags\n"
+          "    Can be one or more of these single letter flags:\n"
+          "        - -- disables all debug logging\n"
+          "        a -- all (enables all optional flags)\n"
+          "        c -- show config file loading process\n"
+          "        s -- show SMTP commands remote sent us\n"
+          "        l -- show email contents as it's received (SMTP 'DATA' command's input)\n"
+          "        r -- show regex pattern match checks\n"
+          "        f -- show all open/close operations on files/pipes\n"
+          "        w -- log non-essential warnings\n"
+          "\n"
+          "Example:\n"
+          "    mailrecv -d sr -c mailrecv-test.conf\n"
           "\n",
           stderr);
     exit(1);
@@ -933,7 +1046,7 @@ int main(int argc, const char *argv[]) {
     // Load config file
     if ( G_conf.Load(conffile) < 0 ) {
         // Tell remote we can't receive SMTP at this time
-        printf("221 Cannot receive messages at this time.\n");
+        printf("221 Cannot receive messages at this time.%s", CRLF);
         fflush(stdout);
         Log("ERROR: Config file has errors (above): "
             "told remote we can't receive emails at this time\n");
@@ -942,7 +1055,7 @@ int main(int argc, const char *argv[]) {
 
     // Check if remote allowed to connect to us
     if ( G_conf.CheckRemote(G_remotehost, G_remoteip) < 0 ) {
-        printf("221 Cannot receive messages from %s [%s] at this time.\n", G_remotehost, G_remoteip);
+        printf("221 Cannot receive messages from %s [%s] at this time.%s", G_remotehost, G_remoteip, CRLF);
         fflush(stdout);
         Log("DENIED: Connection from %s [%s] not in allow_remotehost/ip lists\n", G_remotehost, G_remoteip);
         return 1;
