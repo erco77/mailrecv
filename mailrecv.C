@@ -66,6 +66,16 @@ void Log(const char *msg, ...) {
     va_end(ap);
 }
 
+// Log a debug message only if logging enabled for 'flags'.
+void DebugLog(const char *flags, const char *msg, ...) {
+    if ( G_debugflags[0] && (G_debugflags[0]=='a'||strpbrk(G_debugflags,flags))) {
+        va_list ap;
+        va_start(ap, msg);
+        vsyslog(LOG_ERR, msg, ap);
+        va_end(ap);
+    }
+}
+
 // Do a regular expression match test
 //
 //     regex[in] -- regular expression to match against string
@@ -127,7 +137,7 @@ int AppendMailToFile(const char *mail_from,         // SMTP 'mail from:'
                      const vector<string>& letter,  // email contents, including headers, blank line, body
                      const string& filename) {      // filename to append to
     FILE *fp;
-    ISLOG("f") { Log("DEBUG: fopen(%s,'a')\n", filename.c_str()); }
+    DebugLog("f", "DEBUG: fopen(%s,'a')\n", filename.c_str());
     if ( (fp = fopen(filename.c_str(), "a")) == NULL) {
         Log("ERROR: can't append to %s: %m\n", filename.c_str());   // %m: see syslog(3)
         return -1;  // fail
@@ -137,7 +147,7 @@ int AppendMailToFile(const char *mail_from,         // SMTP 'mail from:'
         fprintf(fp, "%s\n", letter[t].c_str());
     }
     int ret = fclose(fp);
-    ISLOG("f") { Log("DEBUG: fclose() returned %d\n", ret); }
+    DebugLog("f", "DEBUG: fclose() returned %d\n", ret);
     return 1;       // success
 }
 
@@ -146,7 +156,7 @@ int PipeMailToCommand(const char *mail_from,        // SMTP 'mail from:'
                       const char *rcpt_to,          // SMTP 'rcpt to:'
                       const vector<string>& letter, // email contents, including headers, blank line, body
                       const string& command) {      // unix shell command to write to
-    ISLOG("f") { Log("DEBUG: popen(%s,'w')..\n", command.c_str()); }
+    DebugLog("f", "DEBUG: popen(%s,'w')..\n", command.c_str());
     FILE *fp;
     if ( (fp = popen(command.c_str(), "w")) == NULL) {
         Log("ERROR: can't popen(%s): %m\n", command.c_str());
@@ -157,7 +167,7 @@ int PipeMailToCommand(const char *mail_from,        // SMTP 'mail from:'
         fprintf(fp, "%s\n", letter[t].c_str());
     }
     int ret = pclose(fp);
-    ISLOG("f") { Log("DEBUG: pclose() returned %d\n", ret); }
+    DebugLog("f", "DEBUG: pclose() returned %d\n", ret);
     return 1;       // success
 }
 
@@ -286,12 +296,11 @@ public:
     //
     int IsMatch(const char *regex, const char *s) {
         ostringstream logmsg;
-        ISLOG("r") { logmsg << "DEBUG: Checking '" << s << "' ~= '" << regex << "': "; }
         if ( RegexMatch(regex, s) == 1 ) {
-            ISLOG("r") { logmsg << "Matched!"; Log("%s", logmsg.str().c_str()); }
+            DebugLog("r", "DEBUG: Checking '%s' ~= '%s': Matched!", s, regex);
             return 1;   // match
         }
-        ISLOG("r") { logmsg << "no match."; Log("%s", logmsg.str().c_str()); }
+        DebugLog("r", "DEBUG: Checking '%s' ~= '%s': no", s, regex);
         return 0;
     }
 
@@ -314,7 +323,7 @@ public:
     int IsRemoteAllowed() {
         // Nothing configured? Allow anyone
         if ( allow_remotehost_regex.size() == 0 ) {
-            ISLOG("w") { Log("NOTE: All remotes allowed by default"); }
+            DebugLog("w", "NOTE: All remotes allowed by default");
             return 1;
         } else {
             // If one or both configured, must have at least one match
@@ -390,7 +399,7 @@ public:
     int Load(const char *conffile) {
         int err = 0;
         FILE *fp;
-        ISLOG("fc") { Log("DEBUG: fopen(%s,'r')..\n", conffile); }
+        DebugLog("fc", "DEBUG: fopen(%s,'r')..\n", conffile);
         if ( (fp = fopen(conffile, "r")) == NULL) {
             Log("ERROR: can't open %s: %m\n", conffile);
             return -1;
@@ -409,7 +418,7 @@ public:
             if ( line[0] == '\n' ) continue;
 
             // Show each line loaded if debugging..
-            ISLOG("c") { Log("DEBUG: Loading config: %s", line); }   // line includes \n
+            DebugLog("c", "DEBUG: Loading config: %s", line);   // line includes \n
 
             // Handle config commands..
             //
@@ -537,7 +546,7 @@ public:
             }
         }
         int ret = fclose(fp);
-        ISLOG("f") { Log("DEBUG: fclose() returned %d\n", ret); }
+        DebugLog("f", "DEBUG: fclose() returned %d\n", ret);
 
         // Show everything we actually loaded..
         ISLOG("c") {
@@ -777,7 +786,7 @@ int ReadLetter(FILE *fp,                    // [in] connection to remote
     long bytecount = 0;
     while (fgets(s, LINE_LEN, stdin)) {
         StripCRLF(s);
-        ISLOG("l") { Log("DEBUG: Letter: '%s'\n", s); }
+        DebugLog("l", "DEBUG: Letter: '%s'\n", s);
         // End of letter? done
         if ( strcmp(s, ".") == 0 ) return 0;
         // Check limit
@@ -827,9 +836,9 @@ int HandleSMTP() {
         line[LINE_LEN] = 0;        // extra caution
         StripCRLF(line);
 
-        ISLOG("s") { Log("DEBUG: SMTP cmd: %s\n", line); }
-        ISLOG("s") { Log("DEBUG: SMTP cmd: cmdcount=%d, unknowncount=%d, failcount=%d\n", 
-                         smtp_commands_count, smtp_unknowncmd_count, smtp_fail_commands_count); }
+        DebugLog("s", "DEBUG: SMTP cmd: %s\n", line);
+        DebugLog("s", "DEBUG: SMTP cmd: cmdcount=%d, unknowncount=%d, failcount=%d\n",
+                         smtp_commands_count, smtp_unknowncmd_count, smtp_fail_commands_count);
 
         // LIMIT CHECK: # SMTP COMMANDS
         //    NOTE: Empty lines count towards the command counter..
@@ -975,7 +984,7 @@ rcpt_to:
         return 0;
     } else {
         // If we're here, connection closed with no "QUIT".
-        ISLOG("w") { Log("WARNING: Premature end of input for SMTP commands\n"); }
+        DebugLog("w", "WARNING: Premature end of input for SMTP commands\n");
         return 1;               // indicate a possible network error occurred
     }
 }
