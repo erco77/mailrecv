@@ -44,7 +44,7 @@
 using namespace std;
 
 #define LINE_LEN        4096
-#define CRLF            "\r\n"
+#define CRLF            "\r\n"         // RFC 821 (GLOSSARY) / RFC 822 (APPENDIX D)
 #define CONFIG_FILE     "/etc/mailrecv.conf"
 
 // Check for log flags
@@ -219,11 +219,11 @@ class Configure {
     string limit_smtp_rcpt_to_emsg;    // limit on # "RCPT TO:" commands we can receive
 
     vector<AllowGroup> allowgroups;                 // "allow groups"
-    vector<string> deliver_rcpt_to_pipe_allowgroups;// hosts allowed to send to this address (TODO: NOT YET IMPLEMENTED)
+    vector<string> deliver_rcpt_to_pipe_allowgroups;// hosts allowed to send to this address
     vector<string> deliver_rcpt_to_pipe_address;    // configured rcpt_to addresses to pipe to a shell command (TODO: Should be regex instead?)
     vector<string> deliver_rcpt_to_pipe_command;    // rcpt_to shell command to pipe matching mail to address
 
-    vector<string> deliver_rcpt_to_file_allowgroups;// hosts allowed to send to this address (TODO: NOT YET IMPLEMENTED)
+    vector<string> deliver_rcpt_to_file_allowgroups;// hosts allowed to send to this address
     vector<string> deliver_rcpt_to_file_address;    // rcpt_to file addresses we allow (TODO: Should be regex instead?)
     vector<string> deliver_rcpt_to_file_filename;   // rcpt_to file filename we append letters to
 
@@ -231,7 +231,7 @@ class Configure {
     vector<string> errors_rcpt_to_regex;            // error address to match
     vector<string> errors_rcpt_to_message;          // error message to send remote on match
 
-    vector<string> replace_rcpt_to_regex;           // rcpt_to regex to search for (TODO: NOT YET IMPLEMENTED)
+    vector<string> replace_rcpt_to_regex;           // rcpt_to regex to search for            (TODO: NOT YET IMPLEMENTED)
     vector<string> replace_rcpt_to_after;           // rcpt_to regex match replacement string (TODO: NOT YET IMPLEMENTED)
 
     vector<string> allow_remotehost_regex;          // allowed remotehost regex
@@ -651,9 +651,6 @@ public:
         }
 
         // If we're here, nothing matched.. write to deadletter file
-        //
-        // TODO: Return -1 if deadletter append failed
-        //
         // TODO: Pass back actual OS error to remote as part of SMTP response
         //
         if ( AppendMailToFile(mail_from, rcpt_to, letter, deadletter_file) < 0 )
@@ -702,7 +699,7 @@ public:
         return 0;           // OK to deliver
     }
 
-    // CHILD THREAD FOR EXECUTION TIMER
+    // Child thread for execution timer
     static void *ChildExecutionTimer(void *data) {
         long secs = long(data);
         sleep(secs);
@@ -725,9 +722,6 @@ public:
 
 Configure G_conf;
 
-// TODO: Put a timer on this entire program.
-//       Abort if we're running longer than G_config.MaxSecs()
-
 // Minimum commands we must support:
 //      HELO MAIL RCPT DATA RSET NOOP QUIT VRFY
 
@@ -739,10 +733,6 @@ Configure G_conf;
 // Returns:
 //     0 -- success (got IP for sure, may or may not have gotten remote hostname)
 //    -1 -- could not determine any remote info
-//
-// TODO: Allow remote hostname lookups to be optional (as it adds DNS lookup load).
-// TODO: Such an option would need to be automatically enabled if the conf file
-// TODO: "allow remotehost .." is specified.
 //
 int GetRemoteHostInfo(FILE *fp) {
     struct sockaddr_in raddr;
@@ -769,7 +759,7 @@ int GetRemoteHostInfo(FILE *fp) {
     return 0;
 }
 
-// TRUNCATE STRING AT FIRST CR OR LF
+// Truncate string at first CR|LF
 void StripCRLF(char *s) {
     char *eol;
     if ( (eol = strchr(s, '\r')) ) { *eol = 0; }
@@ -779,11 +769,10 @@ void StripCRLF(char *s) {
 #define ISCMD(x)        !strcasecmp(cmd, x)
 #define ISARG1(x)       !strcasecmp(arg1, x)
 
-// READ LETTER'S DATA FROM THE REMOTE
+// Read SMTP DATA letter contents from remote
 //     Assumes an SMTP "DATA" command was just received.
 //
-//     TODO: Should insert a "Received:" block into the headers, above the first one
-//     TODO: encountered, e.g. 
+//     TODO: Should insert a "Received:" block into the headers, above first.
 //     TODO:    Received: from <HELO_FROM> (remotehost [remoteIP])
 //     TODO:              by ourdomain.com (mailrecv) with SMTP id ?????
 //     TODO:              for <rcpt_to>; Sat,  8 Sep 2018 23:44:11 -0400 (EDT)
@@ -793,9 +782,9 @@ void StripCRLF(char *s) {
 //    -1 general failure (premature end of input, limit reached)
 //       emsg has error to send remote.
 //
-int ReadLetter(FILE *fp,                    // [in] connection to remote
-               vector<string>& letter,      // [in] array for saved letter
-               string &emsg) {              // [out] error to send remote on return -1
+int SMTP_ReadLetter(FILE *fp,                    // [in] connection to remote
+                    vector<string>& letter,      // [in] array for saved letter
+                    string &emsg) {              // [out] error to send remote on return -1
     char s[LINE_LEN+1];
     long bytecount = 0;
     while (fgets(s, LINE_LEN, stdin)) {
@@ -945,9 +934,9 @@ rcpt_to:
                 SMTP_Reply("503 Bad sequence of commands -- missing MAIL FROM");
             } else {
                 SMTP_Reply("354 Start mail input; end with <CRLF>.<CRLF>");
-                if ( ReadLetter(stdin, letter, emsg) == -1 ) {
+                if ( SMTP_ReadLetter(stdin, letter, emsg) == -1 ) {
                     ++smtp_fail_commands_count;
-                    printf("%s\n", emsg.c_str());
+                    SMTP_Reply(emsg.c_str());
                     break;              // break fgets() loop
                 }
                 if ( letter.size() < 3 ) {
