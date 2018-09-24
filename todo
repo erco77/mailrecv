@@ -1,5 +1,9 @@
 > Double check for RFC 5321 compliances, etc.
 
+> Add a debug flag to track denied attempts (and reason)
+
+> Add 'connections' flag (to show remote connection's names/ips)
+
 > Insert "Received:" record into mail headers, e.g.
 	Received: <from remote>
 		  <by localhost> (mailrecv)
@@ -10,7 +14,6 @@
 		(No client certificate requested)
 		by qs4088.pair.com (Postfix) with ESMTPSA id AD35815F79A9
 		for <afile@fltkdev.fltk.org>; Mon, 24 Sep 2018 06:39:33 -0400 (EDT)
-
 
 > Add 'deny <host|ip>'
 
