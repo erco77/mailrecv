@@ -354,7 +354,7 @@ public:
     int IsRemoteAllowed() {
         // Nothing configured? Allow anyone
         if ( allow_remotehost_regex.size() == 0 ) {
-            DebugLog("w", "NOTE: All remotes allowed by default");
+            DebugLog("w", "WARNING: All remotes allowed by default");
             return 1;
         } else {
             // If one or both configured, must have at least one match
@@ -644,7 +644,7 @@ public:
                 if ( IsRemoteAllowedByGroup(groupname) ) {
                     // TODO: Check error return of AppendMailToFile(), fall thru to deadletter?
                     AppendMailToFile(mail_from, rcpt_to, letter, deliver_rcpt_to_file_filename[t]);
-                    Log("Mail from=%s to=%s [append to '%s']", 
+                    DebugLog("+", "Mail from=%s to=%s [append to '%s']", 
                          mail_from, rcpt_to, deliver_rcpt_to_file_filename[t].c_str());
                     return 0;   // delivered
                 }
@@ -663,8 +663,8 @@ public:
                 if ( IsRemoteAllowedByGroup(groupname) ) {
                     // TODO: Check error return of PipeMailToCommand(), fall thru to deadletter?
                     PipeMailToCommand(mail_from, rcpt_to, letter, deliver_rcpt_to_pipe_command[t]);
-                    Log("Mail from=%s to=%s [pipe to '%s']", 
-                         mail_from, rcpt_to, deliver_rcpt_to_pipe_command[t].c_str());
+                    DebugLog("+", "Mail from=%s to=%s [pipe to '%s']", 
+                             mail_from, rcpt_to, deliver_rcpt_to_pipe_command[t].c_str());
                     return 0;   // delivered
                 }
                 Log("'%s': remote server %s [%s] not allowed to send to this address",
@@ -680,7 +680,7 @@ public:
         if ( AppendMailToFile(mail_from, rcpt_to, letter, deadletter_file) < 0 )
             return -1;    // failed deadletter delivery? Tell remote we can't deliver
 
-        Log("Mail from=%s to=%s [append to deadletter file '%s']",
+        DebugLog("+", "Mail from=%s to=%s [append to deadletter file '%s']",
             mail_from, rcpt_to, deadletter_file.c_str());
         return 0;   // delivered
     }
@@ -816,7 +816,7 @@ int SMTP_ReadLetter(FILE *fp,                    // [in] connection to remote
         StripCRLF(s);
         DebugLog("l", "DEBUG: Letter: '%s'\n", s);
         // End of letter? done
-        if ( strcmp(s, ".") == 0 ) return 0;
+        if ( strcmp(s, ".") == 0 ) return 0;    // <CRLF>.<CRLF>
         // Check limit
         bytecount += strlen(s);
         if ( G_conf.CheckLimit(bytecount, "smtp_data_size", emsg) < 0 ) {

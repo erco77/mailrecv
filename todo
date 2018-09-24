@@ -1,3 +1,17 @@
+> Double check for RFC 5321 compliances, etc.
+
+> Insert "Received:" record into mail headers, e.g.
+	Received: <from remote>
+		  <by localhost> (mailrecv)
+		  for <RCPT TO>; <local date>
+     Example:
+	Received: from harris.erco.x (adsl-108-65-43-236.dsl.lsan03.sbcglobal.net [108.65.43.236])
+		(using TLSv1.2 with cipher ECDHE-RSA-AES256-GCM-SHA384 (256/256 bits))
+		(No client certificate requested)
+		by qs4088.pair.com (Postfix) with ESMTPSA id AD35815F79A9
+		for <afile@fltkdev.fltk.org>; Mon, 24 Sep 2018 06:39:33 -0400 (EDT)
+
+
 > Add 'deny <host|ip>'
 
 > Docs??
