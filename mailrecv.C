@@ -788,6 +788,7 @@ int SMTP_ReadLetter(FILE *fp,                    // [in] connection to remote
     char s[LINE_LEN+1];
     long bytecount = 0;
     while (fgets(s, LINE_LEN, stdin)) {
+        // Remove trailing CRLF
         StripCRLF(s);
         DebugLog("l", "DEBUG: Letter: '%s'\n", s);
         // End of letter? done
@@ -799,7 +800,8 @@ int SMTP_ReadLetter(FILE *fp,                    // [in] connection to remote
             return -1;
         }
         // Otherwise append lines with CRLF removed to letter
-        letter.push_back(s);
+        if ( s[0] == '.' ) letter.push_back(s+1);   // RFC 822 'Transparency'
+        else               letter.push_back(s);
     }
     // Unexpected end of input
     Log("Premature end of input while receiving email from remote");
