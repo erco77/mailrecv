@@ -971,6 +971,11 @@ rcpt_to:
             ++smtp_fail_commands_count;
             SMTP_Reply("502 Command not implemented or disabled");
             Log("ERROR: Remote tried '%s', we don't support it\n", cmd);
+        } else if ( ISCMD("EHLO") ) {
+            // EHLO is commonly sent first by remotes.
+            //      Log as "IGNORED" (instead of ERROR) so syslog doesn't highlight it in red.
+            SMTP_Reply("500 Unknown command");
+            Log("IGNORED: Remote tried '%s'\n", cmd);
         } else {
             ++smtp_fail_commands_count;
             SMTP_Reply("500 Unknown command");
