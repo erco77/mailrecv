@@ -178,14 +178,38 @@ int PipeMailToCommand(const char *mail_from,        // SMTP 'mail from:'
     return 1;       // success
 }
 
-// Remove surrounding <>'s from email addresses
-void RemoveAngleBrackets(char* address) {
-    for ( char *p = address; *p; p++ ) {
-        if ( *p == '<' ) continue;
-        if ( *p == '>' ) break;
-        *address++ = *p;
+// Isolate the email address
+//     "Foo Bar <foo@bar.com>" -> "foo@bar.com"
+//     "<foo@bar.com>" -> "foo@bar.com"
+//     "foo@bar.com" -> "foo@bar.com"
+//
+void IsolateAddress(char* s) {
+    char *p = s;
+    // Skip leading white
+    while ( *p == ' ' || *p == '\t' ) p++;
+    // Has angle brackets?
+    //     Could be "Full Name <a@b>" or "<a@b>" or "<a@b" or "<<<a@b>"..
+    //
+    if ( strchr(p, '<') ) {              // any '<'s?
+        p = strchr(p, '<');              // skip possible "Full Name"
+        while ( *p ) {                   // parse up to closing '>'
+	    if ( *p == '<' ) { ++p; }    // skip /all/ '<'s
+	    else if ( *p == '>' ) break; // stop at first '>'
+	    else *s++ = *p++;
+	}
+	*s = 0;
+	return;
+    } else {
+	// No leading angle bracket?
+	//     Isolated address ("a@b") or malformed ("a@b>")
+	//
+	while ( *p ) {
+	    if ( *p == '>' ) break;     // "a@b>" -> "a@b"
+	    *s++ = *p++;
+	}
+	*s = 0;                         // eol
+	return;
     }
-    *address++ = 0;
 }
 
 // Class to manage a group of regex patterns
@@ -800,7 +824,7 @@ int SMTP_ReadLetter(FILE *fp,                    // [in] connection to remote
             return -1;
         }
         // Otherwise append lines with CRLF removed to letter
-        if ( s[0] == '.' ) letter.push_back(s+1);   // RFC 822 'Transparency'
+        if ( s[0] == '.' ) letter.push_back(s+1);   // RFC 822 4.5.2 'Transparency'
         else               letter.push_back(s);
     }
     // Unexpected end of input
@@ -896,14 +920,22 @@ int HandleSMTP() {
                 }
             }
         } else if ( ISCMD("RCPT") ) {
+            // RFC 5321 3.3:
+            //     "If RCPT appears w/out previous MAIL, server MUST return a
+            //      503 "Bad sequence of commands" response."
+            //
+            if ( mail_from[0] == 0 ) {
+                ++smtp_fail_commands_count;
+                SMTP_Reply("503 Bad sequence of commands -- missing MAIL FROM");
+            }
             char *address;
-            if ( ISARG1("TO:") ) {
+            if ( ISARG1("TO:") ) {                             // "RCPT TO: foo@bar.com" (not recommended RFC 5321)
                 address = arg2;
                 goto rcpt_to;
             } else if ( strncasecmp(arg1, "TO:", 3) == 0 ) {   // "RCPT TO:foo@bar.com"? (NO space after ":")
                 address = arg1 + 3;                            // get address after the ":"
 rcpt_to:
-                RemoveAngleBrackets(address);                  // "<foo@bar.com>" -> "foo@bar.com"
+                IsolateAddress(address);                       // "<foo@bar.com>" -> "foo@bar.com"
 
                 // LIMIT CHECK: # RCPT TO COMMANDS
                 if ( G_conf.CheckLimit(++smtp_rcpt_to_count, "smtp_rcpt_to", emsg) < 0 ) {
@@ -954,6 +986,8 @@ rcpt_to:
                     }
                 }
             }
+        } else if ( ISCMD("VRFY") ) {
+            SMTP_Reply("252 send some mail, will try my best");
         } else if ( ISCMD("RSET") ) {
             mail_from[0] = 0;
             rcpt_to[0] = 0;
@@ -966,7 +1000,7 @@ rcpt_to:
             SMTP_Reply("214-HELO, DATA, RSET, NOOP, QUIT,");
             SMTP_Reply("214-MAIL FROM:,  RCPT TO:,");
             SMTP_Reply("214 VRFY, EXPN, EHLO, SEND, SOML, SAML, TURN");
-        } else if ( ISCMD("VRFY") || ISCMD("EXPN") ||
+        } else if ( ISCMD("EXPN") ||
                     ISCMD("SEND") || ISCMD("SOML") ||
                     ISCMD("SAML") || ISCMD("TURN") ) {
             // COMMANDS WE DON'T SUPPORT
