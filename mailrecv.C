@@ -844,8 +844,8 @@ int HandleSMTP() {
          cmd[LINE_LEN+1],               // cmd received
          arg1[LINE_LEN+1],              // arg1 received
          arg2[LINE_LEN+1],              // arg2 received
-         mail_from[LINE_LEN+1] = "",    // The remote's "MAIL FROM:" value
-         rcpt_to[LINE_LEN+1]   = "";    // The remote's "RCPT TO:" value (TODO: Should be array; there can be more than one per transaction)
+         mail_from[LINE_LEN+1] = "";    // The remote's "MAIL FROM:" value
+    vector<string> rcpt_tos;            // The remote's "RCPT TO:" value(s)
     const char *our_domain = G_conf.Domain();
 
     // We implement RFC 822 "HELO" protocol only.. no fancy EHLO stuff.
@@ -947,9 +947,9 @@ rcpt_to:
                     ++smtp_fail_commands_count;
                     SMTP_Reply(emsg.c_str());                  // Failed: send error, don't deliver
                 } else {
-                    strcpy(rcpt_to, address);                  // Passed: ok to deliver
+                    rcpt_tos.push_back(address);               // Passed: ok to deliver
                     ostringstream os;
-                    os << "250 " << rcpt_to << "... recipient ok";
+                    os << "250 " << address << "... recipient ok";
                     SMTP_Reply(os.str().c_str());
                 }
             } else {
@@ -960,7 +960,7 @@ rcpt_to:
                 Log("ERROR: unknown RCPT argument '%s'\n", arg1);
             }
         } else if ( ISCMD("DATA") ) {
-            if ( rcpt_to[0] == 0 ) {
+            if ( rcpt_tos.size() == 0 ) {
                 ++smtp_fail_commands_count;
                 SMTP_Reply("503 Bad sequence of commands -- missing RCPT TO");
             } else if ( mail_from[0] == 0 ) {
@@ -979,10 +979,13 @@ rcpt_to:
                     ++smtp_fail_commands_count;
                 } else {
                     // Handle mail delivery
-                    if ( G_conf.DeliverMail(mail_from, rcpt_to, letter) == 0 ) {
-                        SMTP_Reply("250 Message accepted for delivery");
-                    } else {
-                        ++smtp_fail_commands_count;
+                    for ( size_t t=0; t<rcpt_tos.size(); t++ ) {
+                        const char *rcpt_to = rcpt_tos[t].c_str();
+                        if ( G_conf.DeliverMail(mail_from, rcpt_to, letter) == 0 ) {
+                            SMTP_Reply("250 Message accepted for delivery");
+                        } else {
+                            ++smtp_fail_commands_count;
+                        }
                     }
                 }
             }
@@ -990,7 +993,7 @@ rcpt_to:
             SMTP_Reply("252 send some mail, will try my best");
         } else if ( ISCMD("RSET") ) {
             mail_from[0] = 0;
-            rcpt_to[0] = 0;
+            rcpt_tos.clear();
             letter.clear();
             SMTP_Reply("250 OK");
         } else if ( ISCMD("NOOP") ) {
