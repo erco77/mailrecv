@@ -899,6 +899,7 @@ int HandleSMTP() {
     int smtp_unknowncmd_count = 0;
     int smtp_fail_commands_count = 0;
     int smtp_rcpt_to_count = 0;
+    long smtp_cmd_flags = 0;       // bit field, one bit for each SMTP command received
     // CheckLimit() returned error msg, if any
     string emsg;
     int quit = 0;
@@ -930,15 +931,18 @@ int HandleSMTP() {
         arg2[LINE_LEN] = 0;
 
         if ( ISCMD("QUIT") ) {
+            smtp_cmd_flags |= 0x0001;
             quit = 1;
             ostringstream os;
             os << "221 " << our_domain << " closing connection";
             SMTP_Reply(os.str().c_str());
         } else if ( ISCMD("HELO") ) {
+            smtp_cmd_flags |= 0x0002;
             ostringstream os;
             os << "250 " << our_domain << " Hello " << G_remotehost << " [" << G_remoteip << "]";
             SMTP_Reply(os.str().c_str());
         } else if ( ISCMD("MAIL") ) {
+            smtp_cmd_flags |= 0x0004;
             if ( ISARG1("FROM:")) {                         // "MAIL FROM: foo@bar.com"? (space after ":")
                 strcpy(mail_from, arg2);
                 ostringstream os;
@@ -959,6 +963,7 @@ int HandleSMTP() {
                 }
             }
         } else if ( ISCMD("RCPT") ) {
+            smtp_cmd_flags |= 0x0008;
             // RFC 5321 3.3:
             //     "If RCPT appears w/out previous MAIL, server MUST return a
             //      503 "Bad sequence of commands" response."
@@ -1004,6 +1009,7 @@ rcpt_to:
                 Log("ERROR: unknown RCPT argument '%s'\n", arg1);
             }
         } else if ( ISCMD("DATA") ) {
+            smtp_cmd_flags |= 0x0010;
             if ( rcpt_tos.size() == 0 ) {
                 ++smtp_fail_commands_count;
                 SMTP_Reply("503 Bad sequence of commands -- missing RCPT TO");
@@ -1034,27 +1040,35 @@ rcpt_to:
                 }
             }
         } else if ( ISCMD("VRFY") ) {
+            smtp_cmd_flags |= 0x0020;
             SMTP_Reply("252 send some mail, will try my best");
         } else if ( ISCMD("RSET") ) {
+            smtp_cmd_flags |= 0x0040;
             mail_from[0] = 0;
             rcpt_tos.clear();
             letter.clear();
             SMTP_Reply("250 OK");
         } else if ( ISCMD("NOOP") ) {
+            smtp_cmd_flags |= 0x0080;
             SMTP_Reply("250 OK");
         } else if ( ISCMD("HELP") ) {
+            smtp_cmd_flags |= 0x0100;
             SMTP_Reply("214-Help:");
             SMTP_Reply("214-HELO, DATA, RSET, NOOP, QUIT,");
             SMTP_Reply("214-MAIL FROM:,  RCPT TO:,");
             SMTP_Reply("214 VRFY, EXPN, EHLO, SEND, SOML, SAML, TURN");
-        } else if ( ISCMD("EXPN") ||
-                    ISCMD("SEND") || ISCMD("SOML") ||
-                    ISCMD("SAML") || ISCMD("TURN") ) {
-            // COMMANDS WE DON'T SUPPORT
+        } else if ( ISCMD("EXPN") ) {
+            smtp_cmd_flags |= 0x0200;
+no_support:
             ++smtp_fail_commands_count;
             SMTP_Reply("502 Command not implemented or disabled");
             Log("ERROR: Remote tried '%s', we don't support it\n", cmd);
+        } else if ( ISCMD("SEND") ) { smtp_cmd_flags |= 0x0400; goto no_support;
+        } else if ( ISCMD("SOML") ) { smtp_cmd_flags |= 0x0800; goto no_support;
+        } else if ( ISCMD("SAML") ) { smtp_cmd_flags |= 0x1000; goto no_support;
+        } else if ( ISCMD("TURN") ) { smtp_cmd_flags |= 0x2000; goto no_support;
         } else if ( ISCMD("EHLO") ) {
+            smtp_cmd_flags |= 0x0400;
             // EHLO is commonly sent first by remotes.
             //      Log as "IGNORED" (instead of ERROR) so syslog doesn't highlight it in red.
             SMTP_Reply("500 Unknown command");
@@ -1085,6 +1099,10 @@ rcpt_to:
 
     // Flush any closing responses to remote
     fflush(stdout);
+
+    // Log what commands were used
+    ISLOG("F") Log("INFO: [%s] connection closed. smpt_cmd_flags=0x%04lx\n", 
+                   G_remoteip, smtp_cmd_flags);
 
     if ( quit ) {
         // Normal end to session
@@ -1185,6 +1203,7 @@ int main(int argc, const char *argv[]) {
     // Log remote host connection AFTER config loaded
     //     ..in case config sets 'logfile'
     //
+    if ( G_logfilename ) Log("\n");     // RFE: albrecht 03/28/2020
     Log("SMTP connection from remote host %s [%s]\n", G_remotehost, G_remoteip);
 
     // Check if remote allowed to connect to us
