@@ -93,6 +93,21 @@ INSTALL INSTRUCTIONS
 	221 fltk.org closing connection                 <-- mailrecv finishes
 	$
 
+    To test delivery:
+
+        $ nc localhost 25
+	helo mydomain.com
+	mail from: <me@mydomain.com>		-- angle brackets required
+	rcpt to: <me@mydomain.com>		-- angle brackets required
+	data
+	From: Me <me@mydomain.com>
+	Subject: Test
+
+	Test message line 1.
+	Test line 2.
+	.
+	quit
+
 CONFIGURATION
 
     TBD.
