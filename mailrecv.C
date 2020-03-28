@@ -1101,7 +1101,7 @@ no_support:
     fflush(stdout);
 
     // Log what commands were used
-    ISLOG("F") Log("INFO: [%s] connection closed. smpt_cmd_flags=0x%04lx\n", 
+    ISLOG("F") Log("INFO: [%s] connection closed. smtp_cmd_flags=0x%04lx\n", 
                    G_remoteip, smtp_cmd_flags);
 
     if ( quit ) {
