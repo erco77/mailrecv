@@ -1,4 +1,4 @@
-VERSION=1.00
+VERSION=1.10
 SHELL=/bin/sh
 
 mailrecv: mailrecv.C

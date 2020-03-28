@@ -19,3 +19,18 @@
 
 > Docs??
 
+NO. HELL NO
+-----------
+> Check for mail loops.
+
+  No; there's no way to check for mail loops, so don't even ask.
+  We don't SEND email, we just receive it and forward it to either
+  files or other programs (pipes). Pipes can do what they want, 
+  we don't know what they'll do with the message. Those programs
+  have to handle mail loops.
+
+> Add a way to autorespond with a text file's contents.
+
+  NO. Use a pipe instead, and let the command handle the details
+  of outbound mail delivery..
+

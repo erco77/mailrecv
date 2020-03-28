@@ -48,39 +48,61 @@ using namespace std;
 #define CONFIG_FILE     "/etc/mailrecv.conf"
 
 // Check for log flags
-#define ISLOG(s) if (G_debugflags[0] && (G_debugflags[0]=='a'||strpbrk(G_debugflags, s)))
+#define ISLOG(s) if (G_debugflags[0] && (G_debugflags[0]=='a'||strpbrk(G_debugflags,s)))
 
 ///// GLOBALS /////
 const char *G_debugflags = "";         // debug logging flags (see mailrecv.conf for description)
 char        G_remotehost[256];         // Remote's hostname
 char        G_remoteip[80];            // Remote's IP address
+char       *G_logfilename = NULL;      // log filename if configured (if NULL, uses syslog)
+FILE       *G_logfp = NULL;            // log file pointer (remains open for duration of process)
 
 // Log a message...
-//     In addition to the usual printf() behavior, %m is replaced with strerror(errno)
-//     due to syslog(3).
+//     Note: msg can contain '%m', which is replaced with strerror(errno)
+//     You MUST include a trailing \n in msg for consistent logging.
 //
 void Log(const char *msg, ...) {
     va_list ap;
     va_start(ap, msg);
-    vsyslog(LOG_ERR, msg, ap);
-    va_end(ap);
-}
-
-// Log a debug message only if logging enabled for 'flags'.
-void DebugLog(const char *flags, const char *msg, ...) {
-    if ( G_debugflags[0] && (G_debugflags[0]=='a'||strpbrk(G_debugflags,flags))) {
-        va_list ap;
-        va_start(ap, msg);
-        vsyslog(LOG_ERR, msg, ap);
+    if ( !G_logfilename ) {         // No logfile specified?
+        vsyslog(LOG_ERR, msg, ap);  // Use syslog..
         va_end(ap);
+        return;
     }
+    // Logfile specified? Append caller's msg to that file
+    if ( G_logfp == NULL ) {     // Log not open yet? Open it first
+        int prev_errno = errno;  // save previous errno first (in case caller using %m)
+        if ( (G_logfp = fopen(G_logfilename, "a")) == NULL ) {  // open logfile
+            syslog(LOG_ERR, "%s: %m", G_logfilename);           // Error? use syslog to log file error, and..
+            errno = prev_errno;                                 // restore errno for caller (in case %m used), and..
+            vsyslog(LOG_ERR, msg, ap);                          // log caller's error last
+            va_end(ap);
+            return;
+        }
+        errno = prev_errno;
+    }
+
+    // Get current time/date as a string
+    time_t    secs;		// Current UNIX time
+    struct tm *date;		// Current date/time
+    char      datestr[1024];	// Date/time string
+    time(&secs);
+    date = localtime(&secs);
+    strftime(datestr, sizeof(datestr), "%c", date);
+
+    // Log message with date/time followed by message
+    fprintf(G_logfp, "%s MAILRECV[%ld]: ", datestr, (long)getpid());
+    vfprintf(G_logfp, msg, ap); // append caller's error to logfile
+    fflush(G_logfp);            // flush after each line
+
+    va_end(ap);
 }
 
 // Handle sending a reply back to the server with added CRLF
 void SMTP_Reply(const char *s) {
     printf("%s%s", s, CRLF);
     fflush(stdout);
-    DebugLog("s", "DEBUG: SMTP reply: %s\n", s);
+    ISLOG("s") Log("DEBUG: SMTP reply: %s\n", s);
 }
 
 // Do a regular expression match test
@@ -144,7 +166,7 @@ int AppendMailToFile(const char *mail_from,         // SMTP 'mail from:'
                      const vector<string>& letter,  // email contents, including headers, blank line, body
                      const string& filename) {      // filename to append to
     FILE *fp;
-    DebugLog("f", "DEBUG: fopen(%s,'a')\n", filename.c_str());
+    ISLOG("f") Log("DEBUG: fopen(%s,'a')\n", filename.c_str());
     if ( (fp = fopen(filename.c_str(), "a")) == NULL) {
         Log("ERROR: can't append to %s: %m\n", filename.c_str());   // %m: see syslog(3)
         return -1;  // fail
@@ -154,7 +176,7 @@ int AppendMailToFile(const char *mail_from,         // SMTP 'mail from:'
         fprintf(fp, "%s\n", letter[t].c_str());
     }
     int ret = fclose(fp);
-    DebugLog("f", "DEBUG: fclose() returned %d\n", ret);
+    ISLOG("f") Log("DEBUG: fclose() returned %d\n", ret);
     return 1;       // success
 }
 
@@ -163,7 +185,7 @@ int PipeMailToCommand(const char *mail_from,        // SMTP 'mail from:'
                       const char *rcpt_to,          // SMTP 'rcpt to:'
                       const vector<string>& letter, // email contents, including headers, blank line, body
                       const string& command) {      // unix shell command to write to
-    DebugLog("f", "DEBUG: popen(%s,'w')..\n", command.c_str());
+    ISLOG("f") Log("DEBUG: popen(%s,'w')..\n", command.c_str());
     FILE *fp;
     if ( (fp = popen(command.c_str(), "w")) == NULL) {
         Log("ERROR: can't popen(%s): %m\n", command.c_str());
@@ -174,7 +196,7 @@ int PipeMailToCommand(const char *mail_from,        // SMTP 'mail from:'
         fprintf(fp, "%s\n", letter[t].c_str());
     }
     int ret = pclose(fp);
-    DebugLog("f", "DEBUG: pclose() returned %d\n", ret);
+    ISLOG("f") Log("DEBUG: pclose() returned %d\n", ret);
     return 1;       // success
 }
 
@@ -326,12 +348,11 @@ public:
     //     0 -- no match
     //
     int IsMatch(const char *regex, const char *s) {
-        ostringstream logmsg;
         if ( RegexMatch(regex, s) == 1 ) {
-            DebugLog("r", "DEBUG: Checking '%s' ~= '%s': Matched!", s, regex);
+            ISLOG("r") Log("DEBUG: Checking '%s' ~= '%s': Matched!\n", s, regex);
             return 1;   // match
         }
-        DebugLog("r", "DEBUG: Checking '%s' ~= '%s': no", s, regex);
+        ISLOG("r") Log("DEBUG: Checking '%s' ~= '%s': no\n", s, regex);
         return 0;
     }
 
@@ -354,7 +375,7 @@ public:
     int IsRemoteAllowed() {
         // Nothing configured? Allow anyone
         if ( allow_remotehost_regex.size() == 0 ) {
-            DebugLog("w", "WARNING: All remotes allowed by default");
+            ISLOG("w") Log("WARNING: All remotes allowed by default\n");
             return 1;
         } else {
             // If one or both configured, must have at least one match
@@ -381,7 +402,7 @@ public:
             return 0;           // no match; not allowed
         }
         // Didn't find allowgroup -- admin config error!
-        Log("ERROR: group '%s' is referenced but not defined (fix your mailrecv.conf!)",
+        Log("ERROR: group '%s' is referenced but not defined (fix your mailrecv.conf!)\n",
             groupname.c_str());
         return 0;
     }
@@ -430,7 +451,7 @@ public:
     int Load(const char *conffile) {
         int err = 0;
         FILE *fp;
-        DebugLog("fc", "DEBUG: fopen(%s,'r')..\n", conffile);
+        ISLOG("fc") Log("DEBUG: fopen(%s,'r')..\n", conffile);
         if ( (fp = fopen(conffile, "r")) == NULL) {
             Log("ERROR: can't open %s: %m\n", conffile);
             return -1;
@@ -449,7 +470,7 @@ public:
             if ( line[0] == '\n' ) continue;
 
             // Show each line loaded if debugging..
-            DebugLog("c", "DEBUG: Loading config: %s", line);   // line includes \n
+            ISLOG("c") Log("DEBUG: Loading config: %s", line);   // line includes \n
 
             // Handle config commands..
             //
@@ -464,44 +485,53 @@ public:
                         G_debugflags = (const char*)strdup(arg1);
                     }
                 }
+            } else if ( sscanf(line, "logfile %s", arg1) == 1 ) {
+                if ( G_logfilename == 0 ) { // no command line override?
+                    if ( strcmp(arg1, "syslog") == 0 ) {
+                        G_logfilename = 0;
+                        G_logfp = 0;
+                    } else {
+                        G_logfilename = strdup(arg1);
+                    }
+                }
             } else if ( sscanf(line, "limit.smtp_commands %s %[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_smtp_commands) != 1 ) {
-                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_commands_emsg = arg2;
             } else if ( sscanf(line, "limit.smtp_unknowncmd %s %[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_smtp_unknowncmd) != 1 ) {
-                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_unknowncmd_emsg = arg2;
             } else if ( sscanf(line, "limit.smtp_failcmds %s %[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_smtp_failcmds) != 1 ) {
-                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_failcmds_emsg = arg2;
             } else if ( sscanf(line, "limit.connection_secs %s %[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_connection_secs) != 1 ) {
-                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_connection_secs_emsg = arg2;
             } else if ( sscanf(line, "limit.smtp_data_size %s %[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_smtp_data_size) != 1 ) {
-                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_data_size_emsg = arg2;
             } else if ( sscanf(line, "limit.smtp_rcpt_to %s %[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_smtp_rcpt_to) != 1 ) {
-                    Log("ERROR: '%s' (LINE %d): '%s' not an integer", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
@@ -511,7 +541,7 @@ public:
             } else if ( sscanf(line, "allowgroup %s %s", arg1, arg2) == 2 ) {
                 string emsg;
                 if ( AddAllowGroup(arg1, arg2, emsg) < 0 ) {
-                    Log("ERROR: '%s' (LINE %d): %s", conffile, linenum, emsg.c_str());
+                    Log("ERROR: '%s' (LINE %d): %s\n", conffile, linenum, emsg.c_str());
                     err = -1;
                     continue;
                 }
@@ -521,7 +551,7 @@ public:
                 deliver_rcpt_to_file_filename.push_back(arg2);
             } else if ( sscanf(line, "deliver allowgroup %s rcpt_to %s append %s", arg1, arg2, arg3) == 3 ) {
                 if ( IsAllowGroupDefined(arg1) < 0 ) {
-                    Log("ERROR: '%s' (LINE %d): allowgroup '%s' is undefined", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): allowgroup '%s' is undefined\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
@@ -534,7 +564,7 @@ public:
                 deliver_rcpt_to_pipe_command.push_back(arg2);
             } else if ( sscanf(line, "deliver allowgroup %s rcpt_to %s pipe %[^\n]", arg1, arg2, arg3) == 3 ) {
                 if ( IsAllowGroupDefined(arg1) < 0 ) {
-                    Log("ERROR: '%s' (LINE %d): allowgroup '%s' is undefined", conffile, linenum, arg1);
+                    Log("ERROR: '%s' (LINE %d): allowgroup '%s' is undefined\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
@@ -545,7 +575,7 @@ public:
                 int ecode;
                 // Make sure error message includes 3 digit SMTP error code
                 if ( sscanf(arg2, "%d", &ecode) != 1 ) {
-                    Log("ERROR: '%s' (LINE %d): missing 3 digit SMTP error message '%s'", conffile, linenum, arg2);
+                    Log("ERROR: '%s' (LINE %d): missing 3 digit SMTP error message '%s'\n", conffile, linenum, arg2);
                     err = -1;
                     continue;
                 }
@@ -577,11 +607,13 @@ public:
             }
         }
         int ret = fclose(fp);
-        DebugLog("f", "DEBUG: fclose() returned %d\n", ret);
+        ISLOG("f") Log("DEBUG: fclose() returned %d\n", ret);
 
         // Show everything we actually loaded..
         ISLOG("c") {
             Log("DEBUG: --- Config file:\n");
+            Log("DEBUG:    debug: %s\n", G_debugflags);
+            Log("DEBUG:    logfile: '%s'\n", G_logfilename);
             Log("DEBUG:    maxsecs: %d\n", MaxSecs());
             Log("DEBUG:    domain: '%s'\n", Domain());
             Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
@@ -618,7 +650,8 @@ public:
             }
             // global allow remotes..
             for ( t=0; t<allow_remotehost_regex.size(); t++ ) {
-                Log("DEBUG:    allow remote hostnames that match perl regex '%s'\n", allow_remotehost_regex[t].c_str());
+                Log("DEBUG:    allow remote hostnames that match perl regex '%s'\n",
+                    allow_remotehost_regex[t].c_str());
             }
             Log("DEBUG: ---\n");
         }
@@ -644,11 +677,11 @@ public:
                 if ( IsRemoteAllowedByGroup(groupname) ) {
                     // TODO: Check error return of AppendMailToFile(), fall thru to deadletter?
                     AppendMailToFile(mail_from, rcpt_to, letter, deliver_rcpt_to_file_filename[t]);
-                    DebugLog("+", "Mail from=%s to=%s [append to '%s']", 
+                    ISLOG("+") Log("Mail from=%s to=%s [append to '%s']\n", 
                          mail_from, rcpt_to, deliver_rcpt_to_file_filename[t].c_str());
                     return 0;   // delivered
                 }
-                Log("'%s': remote server %s [%s] not allowed to send to this address",
+                Log("'%s': remote server %s [%s] not allowed to send to this address\n",
                     rcpt_to, G_remotehost, G_remoteip);
                 SMTP_Reply("550 Server not allowed to send to this address");
                 return -1;
@@ -663,11 +696,11 @@ public:
                 if ( IsRemoteAllowedByGroup(groupname) ) {
                     // TODO: Check error return of PipeMailToCommand(), fall thru to deadletter?
                     PipeMailToCommand(mail_from, rcpt_to, letter, deliver_rcpt_to_pipe_command[t]);
-                    DebugLog("+", "Mail from=%s to=%s [pipe to '%s']", 
+                    ISLOG("+") Log("Mail from=%s to=%s [pipe to '%s']\n", 
                              mail_from, rcpt_to, deliver_rcpt_to_pipe_command[t].c_str());
                     return 0;   // delivered
                 }
-                Log("'%s': remote server %s [%s] not allowed to send to this address",
+                Log("'%s': remote server %s [%s] not allowed to send to this address\n",
                     rcpt_to, G_remotehost, G_remoteip);
                 SMTP_Reply("550 Server not allowed to send to this address");
                 return -1;
@@ -680,7 +713,7 @@ public:
         if ( AppendMailToFile(mail_from, rcpt_to, letter, deadletter_file) < 0 )
             return -1;    // failed deadletter delivery? Tell remote we can't deliver
 
-        DebugLog("+", "Mail from=%s to=%s [append to deadletter file '%s']",
+        ISLOG("+") Log("Mail from=%s to=%s [append to deadletter file '%s']\n",
             mail_from, rcpt_to, deadletter_file.c_str());
         return 0;   // delivered
     }
@@ -717,9 +750,15 @@ public:
             }
         }
         // Check error addresses last
-        for ( t=0; t<errors_rcpt_to_regex.size(); t++ )
-            if ( RegexMatch(errors_rcpt_to_regex[t].c_str(), address) == 1 ) // reject address configured?
-                { emsg = errors_rcpt_to_message[t]; return -1; }             // return error msg
+        for ( t=0; t<errors_rcpt_to_regex.size(); t++ ) {
+            if ( RegexMatch(errors_rcpt_to_regex[t].c_str(), address) == 1 ) { // reject address configured?
+                emsg = errors_rcpt_to_message[t];
+                emsg += " '";
+                emsg += address;
+                emsg += "'";
+                return -1;  // return error msg
+            }
+        }
         return 0;           // OK to deliver
     }
 
@@ -775,7 +814,7 @@ int GetRemoteHostInfo(FILE *fp) {
         return 0;
     } else {
         // Non-fatal, i.e. if testing from a shell
-        Log("WARNING: getpeername() couldn't determine remote IP address: %m");
+        Log("WARNING: getpeername() couldn't determine remote IP address: %m\n");
         strcpy(G_remotehost, "???");
         strcpy(G_remoteip,   "?.?.?.?");
         return -1;
@@ -814,13 +853,13 @@ int SMTP_ReadLetter(FILE *fp,                    // [in] connection to remote
     while (fgets(s, LINE_LEN, stdin)) {
         // Remove trailing CRLF
         StripCRLF(s);
-        DebugLog("l", "DEBUG: Letter: '%s'\n", s);
+        ISLOG("l") Log("DEBUG: Letter: '%s'\n", s);
         // End of letter? done
         if ( strcmp(s, ".") == 0 ) return 0;    // <CRLF>.<CRLF>
         // Check limit
         bytecount += strlen(s);
         if ( G_conf.CheckLimit(bytecount, "smtp_data_size", emsg) < 0 ) {
-            Log("SMTP DATA limit reached (%d)", bytecount);
+            Log("SMTP DATA limit reached (%d)\n", bytecount);
             return -1;
         }
         // Otherwise append lines with CRLF removed to letter
@@ -828,7 +867,7 @@ int SMTP_ReadLetter(FILE *fp,                    // [in] connection to remote
         else               letter.push_back(s);
     }
     // Unexpected end of input
-    Log("Premature end of input while receiving email from remote");
+    Log("Premature end of input while receiving email from remote\n");
     emsg = "550 End of input during DATA command";
     return -1;                  // premature end of input
 }
@@ -868,15 +907,15 @@ int HandleSMTP() {
         line[LINE_LEN] = 0;        // extra caution
         StripCRLF(line);
 
-        DebugLog("s", "DEBUG: SMTP cmd: %s\n", line);
-        DebugLog("s", "DEBUG: SMTP cmd: cmdcount=%d, unknowncount=%d, failcount=%d\n",
+        ISLOG("s") Log("DEBUG: SMTP cmd: %s\n", line);
+        ISLOG("s") Log("DEBUG: SMTP cmd: cmdcount=%d, unknowncount=%d, failcount=%d\n",
                          smtp_commands_count, smtp_unknowncmd_count, smtp_fail_commands_count);
 
         // LIMIT CHECK: # SMTP COMMANDS
         //    NOTE: Empty lines count towards the command counter..
         //
         if ( G_conf.CheckLimit(++smtp_commands_count, "smtp_commands", emsg) < 0 ) {
-            Log("SMTP #commands limit reached (%d)", smtp_commands_count);
+            Log("SMTP #commands limit reached (%d)\n", smtp_commands_count);
             SMTP_Reply(emsg.c_str());
             break;      // end session
         }
@@ -939,13 +978,18 @@ rcpt_to:
 
                 // LIMIT CHECK: # RCPT TO COMMANDS
                 if ( G_conf.CheckLimit(++smtp_rcpt_to_count, "smtp_rcpt_to", emsg) < 0 ) {
-                    Log("SMTP Number of 'rcpt to' recipients limit reached (%d)", smtp_rcpt_to_count);
+                    ++smtp_fail_commands_count;
+                    Log("SMTP Number of 'rcpt to' recipients limit reached (%d)\n", smtp_rcpt_to_count);
                     SMTP_Reply(emsg.c_str());
+                    // Fail2ban parseable error
+                    ISLOG("F") Log("ERROR: [%s] %s\n", G_remoteip, emsg.c_str());
                     break;  // end session
                 }
                 if ( G_conf.CheckErrorAddress(address, emsg) < 0 ) {
                     ++smtp_fail_commands_count;
                     SMTP_Reply(emsg.c_str());                  // Failed: send error, don't deliver
+                    // Fail2ban parseable error
+                    ISLOG("F") Log("ERROR: [%s] %s\n", G_remoteip, emsg.c_str());
                 } else {
                     rcpt_tos.push_back(address);               // Passed: ok to deliver
                     ostringstream os;
@@ -1022,7 +1066,7 @@ rcpt_to:
 
             // LIMIT CHECK: # UNKNOWN SMTP COMMANDS
             if ( G_conf.CheckLimit(++smtp_unknowncmd_count, "smtp_unknowncmd", emsg) < 0 ) {
-                Log("SMTP #unknown commands limit reached (%d)", smtp_unknowncmd_count);
+                Log("SMTP #unknown commands limit reached (%d)\n", smtp_unknowncmd_count);
                 SMTP_Reply(emsg.c_str());
                 break;  // end session
             }
@@ -1033,7 +1077,7 @@ rcpt_to:
 
         // LIMIT CHECK: # UNKNOWN SMTP COMMANDS
         if ( G_conf.CheckLimit(smtp_fail_commands_count, "smtp_failcmds", emsg) < 0 ) {
-            Log("SMTP #failed commands limit reached (%d)", smtp_fail_commands_count);
+            Log("SMTP #failed commands limit reached (%d)\n", smtp_fail_commands_count);
             SMTP_Reply(emsg.c_str());
             break;  // end session
         }
@@ -1047,19 +1091,21 @@ rcpt_to:
         return 0;
     } else {
         // If we're here, connection closed with no "QUIT".
-        DebugLog("w", "WARNING: Premature end of input for SMTP commands\n");
+        ISLOG("w") Log("WARNING: Premature end of input for SMTP commands\n");
         return 1;               // indicate a possible network error occurred
     }
 }
 
 // Show help and exit
 void HelpAndExit() {
-    fputs("mailrecv - a simple SMTP xinetd daemon (V " VERSION ")\n"
-          "        See LICENSE file packaged with newsd for license/copyright info.\n"
+    const char *helpmsg =
+          "mailrecv - a simple SMTP xinetd daemon (V " VERSION ")\n"
+          "           See LICENSE file packaged with mailrecv for license/copyright info.\n"
           "\n"
           "Options\n"
-          "    -c config-file     -- Use 'config-file' instead of default (" CONFIG_FILE ")\n"
-          "    -d <logflags|->    -- Enable debugging logging flags.\n"
+          "    -c config-file       -- Use 'config-file' instead of default (" CONFIG_FILE ")\n"
+          "    -d <logflags|->      -- Enable debugging logging flags (overrides conf file 'debug').\n"
+          "    -l syslog|<filename> -- Set logfile (overrides conf file 'logfile')\n"
           "\n"
           "Log Flags\n"
           "    Can be one or more of these single letter flags:\n"
@@ -1071,11 +1117,12 @@ void HelpAndExit() {
           "        r -- show regex pattern match checks\n"
           "        f -- show all open/close operations on files/pipes\n"
           "        w -- log non-essential warnings\n"
+          "        F -- fail2ban style error messages (that include IP on same line)\n"
           "\n"
           "Example:\n"
-          "    mailrecv -d sr -c mailrecv-test.conf\n"
-          "\n",
-          stderr);
+          "    mailrecv -d srF -c mailrecv-test.conf -l /var/log/mailrecv.log\n"
+          "\n";
+    fprintf(stderr, "%s", helpmsg);
     exit(1);
 }
 
@@ -1096,8 +1143,7 @@ int main(int argc, const char *argv[]) {
                 return 1;
             }
             conffile = argv[t];
-        }
-        else if (strcmp(argv[t], "-d") == 0) {
+        } else if (strcmp(argv[t], "-d") == 0) {
             if (++t >= argc) {
                 G_debugflags = "a";
             } else {
@@ -1107,24 +1153,39 @@ int main(int argc, const char *argv[]) {
                     G_debugflags = argv[t];
                 }
             }
+        } else if (strcmp(argv[t], "-l") == 0) {
+            if (++t >= argc) {
+                Log("ERROR: expected syslog|filename after '-l'\n");
+                return 1;
+            }
+            if ( strcmp(argv[t], "syslog") == 0 ) {
+                G_logfilename = 0;
+                G_logfp = 0;
+            } else {
+                G_logfilename = strdup(argv[t]);
+            }
         } else if (strncmp(argv[t], "-h", 2) == 0) {
             HelpAndExit();
         } else {
             Log("ERROR: unknown argument '%s'\n", argv[t]);
-            HelpAndExit();
+            exit(1);
+            // HelpAndExit();   // bad: shows up on remote
         }
     }
-
-    // Log remote host connection
-    Log("SMTP connection from remote host %s [%s]\n", G_remotehost, G_remoteip);
 
     // Load config file
     if ( G_conf.Load(conffile) < 0 ) {
         // Tell remote we can't receive SMTP at this time
         SMTP_Reply("221 Cannot receive messages at this time.");
+        Log("SMTP connection from remote host %s [%s]\n", G_remotehost, G_remoteip);
         Log("ERROR: '%s' has errors (above): told remote 'Cannot receive email at this time'\n", conffile);
         return 1;       // fail
     }
+
+    // Log remote host connection AFTER config loaded
+    //     ..in case config sets 'logfile'
+    //
+    Log("SMTP connection from remote host %s [%s]\n", G_remotehost, G_remoteip);
 
     // Check if remote allowed to connect to us
     if ( ! G_conf.IsRemoteAllowed() ) {
