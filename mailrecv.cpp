@@ -215,22 +215,22 @@ void IsolateAddress(char* s) {
     if ( strchr(p, '<') ) {              // any '<'s?
         p = strchr(p, '<');              // skip possible "Full Name"
         while ( *p ) {                   // parse up to closing '>'
-	    if ( *p == '<' ) { ++p; }    // skip /all/ '<'s
-	    else if ( *p == '>' ) break; // stop at first '>'
-	    else *s++ = *p++;
-	}
-	*s = 0;
-	return;
+            if ( *p == '<' ) { ++p; }    // skip /all/ '<'s
+            else if ( *p == '>' ) break; // stop at first '>'
+            else *s++ = *p++;
+        }
+        *s = 0;
+        return;
     } else {
-	// No leading angle bracket?
-	//     Isolated address ("a@b") or malformed ("a@b>")
-	//
-	while ( *p ) {
-	    if ( *p == '>' ) break;     // "a@b>" -> "a@b"
-	    *s++ = *p++;
-	}
-	*s = 0;                         // eol
-	return;
+        // No leading angle bracket?
+        //     Isolated address ("a@b") or malformed ("a@b>")
+        //
+        while ( *p ) {
+            if ( *p == '>' ) break;     // "a@b>" -> "a@b"
+            *s++ = *p++;
+        }
+        *s = 0;                         // eol
+        return;
     }
 }
 

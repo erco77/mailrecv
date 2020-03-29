@@ -1,3 +1,5 @@
+* * * fltkdev
+
 > Double check for RFC 5321 compliances, etc.
 
 > Add a debug flag to track denied attempts (and reason)
@@ -34,3 +36,62 @@ NO. HELL NO
   NO. Use a pipe instead, and let the command handle the details
   of outbound mail delivery..
 
+* * * harris
+
+> 'error' needs to honor new allowgroup stuff.
+
+> (WIP/DONE?) When allowing connections from the great unwashed, 
+  we might want to:
+
+      * Allow an email address to deliver ONLY from certain servers
+      * Allow an email address to give a specific error FROM ALL SERVERS
+      * Reject all else
+  
+  So to allow:
+  	> fltk.coredev@fltk.org only from google, send to pipe
+  	> fltk.general@fltk.org only from google, send to pipe
+	> fltk-bugs@fltk.org from anyone, send an error
+	> info@fltk.org from anyone, send an error
+	> postmaster@fltk.org from anyone, send an error
+
+  ..would be:
+
+      # Define a group called '+news_gateway' and add regex's to it
+      group +news_gateway add ^mail[0-9]*\.google\.com$
+      group +news_gateway add \.google\.com$
+      group +news_gateway add \.pair\.com$
+      group +news_gateway add ^1\.2\.3\.4$		# a specific IP address
+
+      # The above group will be compared to the remote server's hostname/ip
+      #    If rcpt_to matches but server doesn't, error is:
+      #        550 Your server 'host[1.2.3.4]' not permitted to send mail to 'fred@bar.com'
+      #
+      deliver rcpt_to fltk.coredev@fltk.org allow_server=+news_gateway pipe /usr/sbin/newsd -mailgateway fltk.coredev 2>&1 | /usr/bin/logger
+      deliver rcpt_to fltk.general@fltk.org allow_server=+news_gateway pipe /usr/sbin/newsd -mailgateway fltk.coredev 2>&1 | /usr/bin/logger
+
+      # The following errors will be sent for these addresses to any server
+      error   rcpt_to info@fltk.org         allow=*  550 This address disabled. Join the google group fltk.general to contact the admins.
+      error   rcpt_to postmaster@fltk.org   allow=*  550 This address disabled. Join the google group fltk.general to contact the admins.
+
+      # All other rcpt_to addresses will generate an error
+      #   550 No such recipient 'fred@bar.com'
+
+> NO: This means config involves multiple files, too complicated and too many
+  NO: chances for attack vectors + abuse.
+  NO: 
+  NO:   Allow a python script to be invoked for checking helo, mail from, rcpt to, and data
+  NO:   So in mailrecv.conf:
+  NO: 
+  NO:   	checkscript helo      /path/to/foo.py -helo
+  NO:   	checkscript mail_from /path/to/foo.py -mail_from
+  NO:   	checkscript rcpt_to   /path/to/foo.py -rcpt_to
+  NO:   	checkscript data      /path/to/foo.py -data
+  NO: 
+  NO:   Pass info about the remote as env variables:
+  NO: 
+  NO:         MAILRECV_REMOTEHOSTINFO=foo@bar.com[1.2.3.4] <-- who we know they are via IP and reverse lookup
+  NO: 	MAILRECV_HELO=foo@bar.com		     <-- who they said they are
+  NO: 	MAILRECV_ERRFILE=/tmp/.mailrecv-err.<pid>    <-- where python script can put error messages
+  NO: 
+  NO:   In all cases, data passed to the script is on stdin
+  NO:   All error output from python script should probably be piped to logger(1)

@@ -1,8 +1,8 @@
 VERSION=1.10
 SHELL=/bin/sh
 
-mailrecv: mailrecv.C
-	g++ -DVERSION=\"$(VERSION)\" -Wall mailrecv.C -o mailrecv -l pcre -lpthread
+mailrecv: mailrecv.cpp
+	g++ -DVERSION=\"$(VERSION)\" -Wall mailrecv.cpp -o mailrecv -l pcre -lpthread
 
 clean: FORCE
 	if [ -e mailrecv ]; then rm -f mailrecv; fi
