@@ -1068,7 +1068,7 @@ no_support:
         } else if ( ISCMD("SAML") ) { smtp_cmd_flags |= 0x1000; goto no_support;
         } else if ( ISCMD("TURN") ) { smtp_cmd_flags |= 0x2000; goto no_support;
         } else if ( ISCMD("EHLO") ) {
-            smtp_cmd_flags |= 0x0400;
+            smtp_cmd_flags |= 0x4000;
             // EHLO is commonly sent first by remotes.
             //      Log as "IGNORED" (instead of ERROR) so syslog doesn't highlight it in red.
             SMTP_Reply("500 Unknown command");
