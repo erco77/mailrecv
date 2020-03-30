@@ -1,7 +1,7 @@
 // vim: autoindent tabstop=8 shiftwidth=4 expandtab softtabstop=4
 
 //
-// mailrecv.C -- xinetd tool to act as a simple SMTP server
+// mailrecv.cpp -- xinetd tool to act as a simple SMTP server
 //
 //     We just append letters to valid recipients to either a file
 //     or pipe based on the RCPT TO: address.
@@ -96,6 +96,54 @@ void Log(const char *msg, ...) {
     fflush(G_logfp);            // flush after each line
 
     va_end(ap);
+}
+
+// Return ASCII only version of string 's', with binary encoded as hex <0x##>
+//     NOTE: in the following, "ASCII" is defined as per RFC 822 4.1.2.
+//
+char *ASCIIHexEncode(const char *s, int allow_crlf=0) {
+    // First pass: determine how large output string needs to be
+    int outlen = 0;
+    const char *ss = s;
+    while ( *ss ) {
+        if ( *ss >= 0x20 && *ss <= 0x7e )   // Printable ASCII? (RFC 822 4.1.2)
+            { ++outlen; }                   // OK
+        else if ( allow_crlf && (*ss == '\r' || *ss == '\n') ) // CRLF allowed?
+            { ++outlen; }                   // OK
+        else
+            { outlen += 6; }                // 6 chars for every one binary char
+        ++ss;
+    }
+    char *buf = (char*)malloc(outlen);
+    char *out = buf;
+    ss = s;
+    while ( *ss ) {
+        if ( *ss >= 0x20 && *ss <= 0x7e )   // Printable ASCII?
+            { *out++ = *ss; }               // OK
+        else if ( allow_crlf && (*ss == '\r' || *ss == '\n') ) // CRLF allowed?
+            { *out++ = *ss; }               // OK
+        else {
+            sprintf(out, "<0x%02x>", (unsigned char)*ss);  // write hex code
+            out += 6;                       // move past hex code
+        }
+        ++ss;
+    }
+    *out = 0;
+    return buf;
+}
+
+// Check if string 's' contains any binary data, return 1 if so.
+//     NOTE: Binary is defined as any character not allowed by RFC 822 4.1.2.
+//
+int BinaryCheck(const char *s, int allow_crlf=0) {
+    while ( *s ) {
+        if ( *s >= 0x20 && *s <= 0x7e )                 // Printable ASCII?
+            { ++s; continue; }                          // ..OK
+        if ( allow_crlf && (*s == '\r' || *s == '\n') ) // CRLF allowed?
+            { ++s; continue; }                          // ..OK
+        return 1;                                       // binary? return 1
+    }
+    return 0;                                           // no binary? return 0
 }
 
 // Handle sending a reply back to the server with added CRLF
@@ -245,6 +293,8 @@ struct AllowGroup {
 //
 class Configure {
     int maxsecs;                                    // maximum seconds program should run before stopping
+    char loghex;                                    // 1=log binary chars in HEX, 0=no hex translation
+    char ascii_smtp;                                // 1=SMTP commands+args ASCII only, 0=don't care
     string domain;                                  // domain our server should know itself as (e.g. "example.com")
                                                     // and accept email messages for.
     string deadletter_file;                         // file to append messages to that have no 'deliver'
@@ -284,8 +334,10 @@ class Configure {
 
 public:
     Configure() {
-        maxsecs = 300;
-        domain  = "example.com";
+        maxsecs    = 300;
+        loghex     = 0;                             // loghex [default: off]
+        ascii_smtp = 1;                             // ascii-only smtp cmd strings [default: on]
+        domain     = "example.com";
         deadletter_file = "/dev/null";              // must be set to "something"
         limit_smtp_commands        = 25;
         limit_smtp_commands_emsg   = "500 Too many SMTP commands received in session.";
@@ -303,8 +355,23 @@ public:
 
     // Accessors
     int MaxSecs() const { return maxsecs; }
+    int LogHex() const { return loghex; }
+    int AsciiSmtp() const { return ascii_smtp; }
     const char *Domain() const { return domain.c_str(); }
     const char *DeadLetterFile() const { return deadletter_file.c_str(); }
+
+    // See if string is "on" or "off" (or similar values)
+    //    Returns -1 if unknown string
+    //
+    int OnOff(const char *s) {
+        if ( strcmp(s, "yes" ) == 0 ) return 1;
+        if ( strcmp(s, "on"  ) == 0 ) return 1;
+        if ( strcmp(s, "1"   ) == 0 ) return 1;
+        if ( strcmp(s, "no"  ) == 0 ) return 0;
+        if ( strcmp(s, "off" ) == 0 ) return 0;
+        if ( strcmp(s, "0"   ) == 0 ) return 0;
+        return -1;
+    }
 
     // Limit checks
     // Returns:
@@ -485,6 +552,24 @@ public:
                         G_debugflags = (const char*)strdup(arg1);
                     }
                 }
+            } else if ( sscanf(line, "loghex %8s", arg1) == 1 ) {
+                int onoff = OnOff(arg1);
+                if ( onoff < 0 ) {      // error?
+                    Log("ERROR: '%s' (LINE %d): 'loghex %s' expected (on|off)\n",
+                        conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
+                loghex = onoff;
+            } else if ( sscanf(line, "ascii_smtp %8s", arg1) == 1 ) {
+                int onoff = OnOff(arg1);
+                if ( onoff < 0 ) {      // error?
+                    Log("ERROR: '%s' (LINE %d): 'ascii_smtp %s' expected (on|off)\n",
+                        conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
+                ascii_smtp = onoff;
             } else if ( sscanf(line, "logfile %s", arg1) == 1 ) {
                 if ( G_logfilename == 0 ) { // no command line override?
                     if ( strcmp(arg1, "syslog") == 0 ) {
@@ -615,6 +700,8 @@ public:
             Log("DEBUG:    debug: %s\n", G_debugflags);
             Log("DEBUG:    logfile: '%s'\n", G_logfilename);
             Log("DEBUG:    maxsecs: %d\n", MaxSecs());
+            Log("DEBUG:    loghex: %d\n", LogHex());
+            Log("DEBUG:    ascii_smtp: %d\n", AsciiSmtp());
             Log("DEBUG:    domain: '%s'\n", Domain());
             Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
             Log("DEBUG:    limit_smtp_commands    max=%ld msg=%s\n", limit_smtp_commands,   limit_smtp_commands_emsg.c_str());
@@ -908,9 +995,19 @@ int HandleSMTP() {
         line[LINE_LEN] = 0;        // extra caution
         StripCRLF(line);
 
-        ISLOG("s") Log("DEBUG: SMTP cmd: %s\n", line);
-        ISLOG("s") Log("DEBUG: SMTP cmd: cmdcount=%d, unknowncount=%d, failcount=%d\n",
-                         smtp_commands_count, smtp_unknowncmd_count, smtp_fail_commands_count);
+        // LOG THE RECEIVED SMTP COMMAND
+        ISLOG("s") {
+            if ( G_conf.LogHex() ) {
+                // Handle if we should log any binary from the remote as hex
+                char *line_safe = ASCIIHexEncode(line);
+                Log("DEBUG: SMTP cmd: %s\n", line_safe);
+                free(line_safe);
+            } else {
+                Log("DEBUG: SMTP cmd: %s\n", line);
+            }
+            Log("DEBUG: SMTP cmd: cmdcount=%d, unknowncount=%d, failcount=%d\n",
+                smtp_commands_count, smtp_unknowncmd_count, smtp_fail_commands_count);
+        }
 
         // LIMIT CHECK: # SMTP COMMANDS
         //    NOTE: Empty lines count towards the command counter..
@@ -919,6 +1016,15 @@ int HandleSMTP() {
             Log("SMTP #commands limit reached (%d)\n", smtp_commands_count);
             SMTP_Reply(emsg.c_str());
             break;      // end session
+        }
+
+        // WAS THERE BINARY DATA IN SMTP COMMAND THAT IS NOT ALLOWED?
+        //    Do this check AFTER limit check for command count
+        //
+        if ( BinaryCheck(line) && G_conf.AsciiSmtp() ) {
+            ++smtp_fail_commands_count;
+            SMTP_Reply("500 Binary data (non-ASCII) unsupported");
+            goto command_done;
         }
 
         // Break up command into args
@@ -1086,6 +1192,7 @@ no_support:
             }
         }
 
+command_done:
         // All commands end up here, successful or not
         fflush(stdout);
 

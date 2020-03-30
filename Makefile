@@ -1,4 +1,4 @@
-VERSION=1.10
+VERSION=1.11
 SHELL=/bin/sh
 
 mailrecv: mailrecv.cpp
