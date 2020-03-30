@@ -1,4 +1,12 @@
+
 * * * fltkdev
+> reimplement AsciiHexEncode() to use std::string to avoid malloc()/free()
+
+> Make a mailrecv.8 manpage w/pod2man -- use 'plain old documentation' (POD)
+
+> Make a mailrecv.conf.8 manpage w/pod2man
+
+(DONE) Reimplement ascii_smtp as a limit.smtp_ascii
 
 > Double check for RFC 5321 compliances, etc.
 

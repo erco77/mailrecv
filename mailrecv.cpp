@@ -101,7 +101,7 @@ void Log(const char *msg, ...) {
 // Return ASCII only version of string 's', with binary encoded as hex <0x##>
 //     NOTE: in the following, "ASCII" is defined as per RFC 822 4.1.2.
 //
-char *ASCIIHexEncode(const char *s, int allow_crlf=0) {
+char *AsciiHexEncode(const char *s, int allow_crlf=0) {
     // First pass: determine how large output string needs to be
     int outlen = 0;
     const char *ss = s;
@@ -294,7 +294,6 @@ struct AllowGroup {
 class Configure {
     int maxsecs;                                    // maximum seconds program should run before stopping
     char loghex;                                    // 1=log binary chars in HEX, 0=no hex translation
-    char ascii_smtp;                                // 1=SMTP commands+args ASCII only, 0=don't care
     string domain;                                  // domain our server should know itself as (e.g. "example.com")
                                                     // and accept email messages for.
     string deadletter_file;                         // file to append messages to that have no 'deliver'
@@ -306,6 +305,7 @@ class Configure {
     long limit_connection_secs;        // limit connection time (in secs)
     long limit_smtp_data_size;         // limit on #bytes DATA command can receive
     long limit_smtp_rcpt_to;           // limit on # "RCPT TO:" commands we can receive
+    int  limit_smtp_ascii;             // limit on smtp commands+args to ascii only content
     // Error strings for each limit..
     string limit_smtp_commands_emsg;   // limit on # smtp commands per session
     string limit_smtp_unknowncmd_emsg; // limit on # unknown smtp commands per session
@@ -313,6 +313,7 @@ class Configure {
     string limit_connection_secs_emsg; // limit connection time (in secs)
     string limit_smtp_data_size_emsg;  // limit on #bytes DATA command can receive
     string limit_smtp_rcpt_to_emsg;    // limit on # "RCPT TO:" commands we can receive
+    string limit_smtp_ascii_emsg;      // limit on smtp commands+args to ascii only content
 
     vector<AllowGroup> allowgroups;                 // "allow groups"
     vector<string> deliver_rcpt_to_pipe_allowgroups;// hosts allowed to send to this address
@@ -336,7 +337,6 @@ public:
     Configure() {
         maxsecs    = 300;
         loghex     = 0;                             // loghex [default: off]
-        ascii_smtp = 1;                             // ascii-only smtp cmd strings [default: on]
         domain     = "example.com";
         deadletter_file = "/dev/null";              // must be set to "something"
         limit_smtp_commands        = 25;
@@ -351,12 +351,14 @@ public:
         limit_smtp_data_size_emsg  = "552 Too much mail data.";
         limit_smtp_rcpt_to         = 5;
         limit_smtp_rcpt_to_emsg    = "452 Too many recipients.";    // RFC 2821 4.5.3.1
+        limit_smtp_ascii           = OnOff("on");                   // ascii-only smtp cmd strings [default: on]
+        limit_smtp_ascii_emsg      = "500 Binary data (non-ASCII) unsupported";
     }
 
     // Accessors
     int MaxSecs() const { return maxsecs; }
     int LogHex() const { return loghex; }
-    int AsciiSmtp() const { return ascii_smtp; }
+    int LimitSmtpAscii() const { return limit_smtp_ascii; }
     const char *Domain() const { return domain.c_str(); }
     const char *DeadLetterFile() const { return deadletter_file.c_str(); }
 
@@ -561,15 +563,6 @@ public:
                     continue;
                 }
                 loghex = onoff;
-            } else if ( sscanf(line, "ascii_smtp %8s", arg1) == 1 ) {
-                int onoff = OnOff(arg1);
-                if ( onoff < 0 ) {      // error?
-                    Log("ERROR: '%s' (LINE %d): 'ascii_smtp %s' expected (on|off)\n",
-                        conffile, linenum, arg1);
-                    err = -1;
-                    continue;
-                }
-                ascii_smtp = onoff;
             } else if ( sscanf(line, "logfile %s", arg1) == 1 ) {
                 if ( G_logfilename == 0 ) { // no command line override?
                     if ( strcmp(arg1, "syslog") == 0 ) {
@@ -621,6 +614,16 @@ public:
                     continue;
                 }
                 limit_smtp_rcpt_to_emsg = arg2;
+            } else if ( sscanf(line, "limit.smtp_ascii %s %[^\n]", arg1, arg2) == 2 ) {
+                int onoff = OnOff(arg1);
+                if ( onoff < 0 ) {      // error?
+                    Log("ERROR: '%s' (LINE %d): 'limit.smtp_ascii %s' expected (on|off)\n",
+                        conffile, linenum, arg1);
+                    err = -1;
+                    continue;
+                }
+                limit_smtp_ascii      = onoff;
+                limit_smtp_ascii_emsg = arg2;
             } else if ( sscanf(line, "deadletter_file %s", arg1) == 1 ) {
                 deadletter_file = arg1;
             } else if ( sscanf(line, "allowgroup %s %s", arg1, arg2) == 2 ) {
@@ -701,7 +704,6 @@ public:
             Log("DEBUG:    logfile: '%s'\n", G_logfilename);
             Log("DEBUG:    maxsecs: %d\n", MaxSecs());
             Log("DEBUG:    loghex: %d\n", LogHex());
-            Log("DEBUG:    ascii_smtp: %d\n", AsciiSmtp());
             Log("DEBUG:    domain: '%s'\n", Domain());
             Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
             Log("DEBUG:    limit_smtp_commands    max=%ld msg=%s\n", limit_smtp_commands,   limit_smtp_commands_emsg.c_str());
@@ -710,6 +712,7 @@ public:
             Log("DEBUG:    limit_connection_secs  max=%ld msg=%s\n", limit_connection_secs, limit_connection_secs_emsg.c_str());
             Log("DEBUG:    limit_smtp_data_size   max=%ld msg=%s\n", limit_smtp_data_size,  limit_smtp_data_size_emsg.c_str());
             Log("DEBUG:    limit_smtp_rcpt_to     max=%ld msg=%s\n", limit_smtp_rcpt_to,    limit_smtp_rcpt_to_emsg.c_str());
+            Log("DEBUG:    limit_smtp_ascii       val=%d msg=%s\n",  limit_smtp_ascii,      limit_smtp_ascii_emsg.c_str());
 
             size_t t;
             // Allowgroups..
@@ -999,7 +1002,7 @@ int HandleSMTP() {
         ISLOG("s") {
             if ( G_conf.LogHex() ) {
                 // Handle if we should log any binary from the remote as hex
-                char *line_safe = ASCIIHexEncode(line);
+                char *line_safe = AsciiHexEncode(line);
                 Log("DEBUG: SMTP cmd: %s\n", line_safe);
                 free(line_safe);
             } else {
@@ -1021,7 +1024,7 @@ int HandleSMTP() {
         // WAS THERE BINARY DATA IN SMTP COMMAND THAT IS NOT ALLOWED?
         //    Do this check AFTER limit check for command count
         //
-        if ( BinaryCheck(line) && G_conf.AsciiSmtp() ) {
+        if ( BinaryCheck(line) && G_conf.LimitSmtpAscii() ) {
             ++smtp_fail_commands_count;
             SMTP_Reply("500 Binary data (non-ASCII) unsupported");
             goto command_done;
@@ -1232,7 +1235,7 @@ void HelpAndExit() {
           "    -d <logflags|->      -- Enable debugging logging flags (overrides conf file 'debug').\n"
           "    -l syslog|<filename> -- Set logfile (overrides conf file 'logfile')\n"
           "\n"
-          "Log Flags\n"
+          "<logflags>\n"
           "    Can be one or more of these single letter flags:\n"
           "        - -- disables all debug logging\n"
           "        a -- all (enables all optional flags)\n"
@@ -1243,9 +1246,11 @@ void HelpAndExit() {
           "        f -- show all open/close operations on files/pipes\n"
           "        w -- log non-essential warnings\n"
           "        F -- fail2ban style error messages (that include IP on same line)\n"
+          "        + -- logs MAIL FROM/TO commands\n"
           "\n"
           "Example:\n"
           "    mailrecv -d srF -c mailrecv-test.conf -l /var/log/mailrecv.log\n"
+          "    mailrecv -d c -c mailrecv-test.conf -l /dev/tty     # log to your terminal\n"
           "\n";
     fprintf(stderr, "%s", helpmsg);
     exit(1);
