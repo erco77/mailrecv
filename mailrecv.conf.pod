@@ -1,0 +1,285 @@
+=for comment
+vim: autoindent tabstop=8 shiftwidth=4 expandtab softtabstop=4
+
+=head1 NAME
+
+mailrecv.conf - configuration files for mailrecv(8)
+
+=head1 DESCRIPTION
+
+I<mailrecv(8)> is an xinetd daemon that manages inbound smtp
+mail delivery. It uses a config file to control its operation.
+
+=head1 THE MAILRECV.CONF FILE
+
+By default, I<mailrecv> reads the file /etc/mailrecv.conf
+to obtain the global configuration for the server. The file is
+simple text and uses the "#" character to start comments. 
+
+The following directives are supported:
+
+=over
+
+=item debug <flags>
+
+Sets the debug logging flags.
+Can be one or more of these single letter flags.
+
+    - -- disables all debug logging
+    a -- all (enables all optional flags)
+    c -- show config file loading process
+    s -- show SMTP commands remote sent us
+    l -- show email contents as it's received (SMTP 'DATA' command's input)
+    r -- show regex pattern match checks
+    f -- show all open/close operations on files/pipes
+    w -- log non-essential warnings
+    + -- one line mail from/to/handler info (RECOMMENDED)
+    F -- fail2ban (includes IP in errors common to ban)
+
+Default is '-'.
+
+Example: 
+
+    debug csr+      # show config, smtp cmds, regex matches and one line from/to info
+
+=item logfile syslog|<filename>
+
+Sets optional filename to append all log messages to.
+
+Default is 'syslog', which logs to the system log via syslog(3).
+
+Example:
+
+    logfile /var/log/mailrecv.log
+
+=item loghex on|off
+
+Enables logging binary data in hex, instead of as raw data.
+Helps prevent fail2ban from barfing on binary data from remotes.
+
+Default is 'off', to ensure logs reflect actual content from remote.
+
+=item domain example.com
+
+Sets the domain name for this server to know itself as.
+
+This name is used in the initial SMTP '220' reply when any new
+server connects to mailrecv.
+
+=item deadletter_file <filename>
+
+Where to write received email that has no configured recipient.
+This can either be a file, or /dev/null to simply throw them away.
+
+Default is /dev/null.
+
+=item limit.smtp_commands <val> <emsg>
+
+Limits the number of SMTP commands the remote user can execute before
+mailrecv terminates the connection with the specified <emsg>.
+
+<val> is the maximum number of commands allowed, and must be greater than 1.
+
+<emsg> is the error message that is sent to the remote when the maximum
+value is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+
+Example:
+
+    limit.smtp_commands   25    500 Too many SMTP commands received in session
+                          --    ----------------------------------------------
+                          Value Error message
+
+=item limit.smtp_unknowncmd <val> <emsg>
+
+Limits the number of 'unknown SMTP commands' the remote is allowed to use
+before mailrecv terminates the connection with the specified <emsg>.
+
+<val> is the maximum number of unknown commands allowed, and must be greater
+than 1.
+
+<emsg> is the error message that is sent to the remote when the maximum
+value is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+
+Example:
+
+    limit.smtp_unknowncmd 4     500 Too many bad commands
+                          --    -------------------------
+                          Value Error message
+
+=item limit.smtp_failcmds  <val> <emsg>
+
+Limits the number of failed SMTP commands. (e.g. email addresses that
+fail to resolve, etc)
+
+This is mainly for spam prevention, to to prevent the remote from
+trying to send a huge list of email addresses in a single connection
+in the hopes of finding a few that are valid.
+
+<val> is the maximum number of failed commands allowed, and must be
+greater than 1.
+
+<emsg> is the error message that is sent to the remote when the maximum
+is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+
+Example:
+
+    limit.smtp_failcmds   4     500 Too many failed commands
+                          --    ----------------------------
+                          Value Error message
+
+=item limit.connection_secs <val> <emsg>
+
+Limits the amount of time a remote can take to complete the SMTP
+transaction and QUIT. This prevents a remote from leaving connections
+open for too long.
+
+<val> is the maximum number of seconds before the connection is closed
+due to inactivity. Value must be greater than 1.
+
+<emsg> is the error message that is sent to the remote when the maximum
+is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+
+Example:
+
+    limit.connection_secs 600   500 Connection timeout
+                          ---   ----------------------------
+                          Value Error message
+
+=item limit.smtp_data_size  <val> <emsg>
+
+Limits the number of bytes that can be sent as part of an SMTP "DATA" command,
+limiting how large of an email payload can be sent. 
+
+NOTE: modern email messages can be quite large due to even the smallest
+image attachments, contact info vcards, html mime content, etc.
+
+<val> is the maximum number in bytes. If exceeded, any extra data is dropped,
+and on completion <emsg> is sent as the error reply, indicating the message
+would not be delivered. Value must be greater than 1.
+
+<emsg> is the error message that is sent to the remote when the maximum
+is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+
+Example:
+
+    limit.smtp_data_size  24000000 552 Too much mail data
+                          -------- ----------------------------
+                          Value    Error message
+
+=item limit.smtp_rcpt_to  <val> <emsg>
+
+Limits the number of "RCPT TO:" commands we can receive, before failing
+with the error in <emsg>
+
+<val> is the maximum number of commands. If exceeded, <emsg> is sent
+in response to this, and all subsequent RCPT TO commands.
+
+<emsg> is the error message that is sent to the remote when the maximum
+is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+
+Example:
+
+    limit.smtp_rcpt_to    5     452 Too many recipients (RFC 2821 4.5.3.1)
+                          ---   ------------------------------------------
+                          Value Error message
+
+=item limit.smtp_ascii <on|off> <emsg>
+
+When enabled, all SMTP commands and command arguments must be ASCII only,
+as defined by RFC 822 4.2.1.  Any non-ASCII content in a SMTP command will
+cause <esmg> as the reply, and the command will be ignored. UTF-8 content
+can trip this error, since values above 0x7e are considered non-ASCII as per
+RFC 822.
+
+Generally, arguments to smtp commands are either domain names or email
+addresses, both of which should not contain utf8 strings, so this should
+be safe to leave on.
+
+The main thrust of this feature is to prevent remotes from sending binary
+data to attack/confuse logging, and tools that monitor logs such as fail2ban.
+
+When enabled, this does NOT affect email payload sent as part of a DATA command.
+
+<val> is either 'on' or 'off'. If 'on', non-ASCII content trips the error msg
+response in <emsg>, the command is ignored, and counts as a 'failed command'.
+
+<emsg> is the error message that is sent to the remote when the maximum
+is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+
+Example:
+
+    limit.smtp_ascii  on    500 Binary data (non-ASCII) unsupported
+                      ---   ---------------------------------------
+                      Value Error message
+
+=item allowgroup <name> <regex>
+
+Builds an 'allowgroup' with the name <name>, and appends <regex> to that group.
+The <name> can later be used in other commands so as to refer to all the <regex>'s
+defined.
+
+The allowgroup <name> can then be referred to by other commands, to match all
+the <regex>s defined in that group against the remote connection's FQDN hostname
+resolved by DNS.
+
+<name> is a freeform alpha-numeric string that by convention starts with '+',
+and must not contain spaces. Preferrably all lowercase, with either underbars,
+dashes or periods in place of spaces, and avoids any other special characters
+if possible.
+
+<regex> is a perl regular expression used to match against the hostname/domain
+of the remote connection as resolved by DNS. (Arguments supplied by the remote
+in HELO commands are not trusted and therefore not used). IP addresses may also
+be used for a match.
+
+Example: The following shows us defining a single allowgroup called "+trusted"
+
+    # Define an allowgroup called '+trusted' with two regex patterns
+    allowgroup +trusted \.foo\.com$
+    allowgroup +trusted \.bar\.com$
+
+    # Define two email addresses that can be sent data from the above domains
+    deliver allowgroup +trusted rcpt_to foo@us.com pipe /some/mail-delivery-app ..
+    deliver allowgroup +trusted rcpt_to bar@us.com pipe /some/mail-delivery-app ..
+
+    # If none of the above match, all other rcpt_to attempts will match the
+    # following line, tripping an error to the remote:
+    error rcpt_to .* 550 No one here by that name.
+
+Here, a remote connection from either xxx.foo.com or xxx.bar.com is allowed
+to use the 'rcpt_to' command to send an email to foo@us.com. Message delivery
+is handled by the program /some/mail-delivery-app via a pipe on stdin.
+
+The last line, 'error rcpt_to .* <emsg>' is used if nothing else above it
+matches, ensuring an error is sent to the remote.
+
+Multiple allowgroups can be defined and referenced by name.
+
+=back
+
+=head1 SEE ALSO
+
+=over
+
+=item mailrecv(8)
+
+=back
+
+=head1 REPORTING BUGS
+
+=over
+
+Report bugs using the github issue page for the newsd project:
+https://github.com/erco77/mailrecv/issues
+
+=back
+
+=head1 AUTHORS
+
+=over
+
+=item Greg Ercolano, Los Angeles, Calif. USA
+
+=back
+
+=cut
