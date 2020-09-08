@@ -114,6 +114,7 @@ char *AsciiHexEncode(const char *s, int allow_crlf=0) {
             { outlen += 6; }                // 6 chars for every one binary char
         ++ss;
     }
+    ++outlen; // leave room for terminating NULL
     char *buf = (char*)malloc(outlen);
     char *out = buf;
     ss = s;
