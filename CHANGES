@@ -1,0 +1,47 @@
+1.13 - Jul 15, 2022
+===================
+
+  > Modified remote ip address reporting so logfile's 'F' flag
+    logs the remote ip address for ALL log lines. aids fail2ban filtering.
+
+  > Made fail2ban filtering the default, and 'loghex' now defaults to 'on'.
+    Sometimes probes include control characters that screws up fail2ban,
+    causing fail2ban to fail to parse:
+
+    WARNING Error decoding line from '/var/log/mailrecv.log' with 'utf-8'.
+            Consider setting logencoding=utf-8 (or another appropriate encoding)
+            for this jail. Continuing to process line ignoring invalid characters: [..ctrl chars..]
+
+1.12 - Mar 30, 2020
+===================
+
+  > Created manpages for mailrecv and mailrecv.conf in POD format:
+    mailrecv.conf.pod is still in progress; documenting the delivery
+    and error commands will take some work.
+
+  > Reimplemented 'ascii_smtp' as 'limit.smtp_ascii' in .conf file
+
+1.10 - Mar 28, 2020
+===================
+
+  > Added fail2ban style errors for common probes
+
+  > Added the special logfile flag 'F', which generates error messages
+    that fail2ban can easily parse; a message that includes (in one line)
+    the IP of the remote, a unique ERROR indicator, and a free form error
+    message that fail2ban can ignore, but is useful for auditing, e.g.
+
+      ERROR: [192.168.1.1] <free form errormsg>
+      \____/  \_________/  \__________________/
+        |          |               |
+        |          |               |___ error message useful for auditing
+        |          |
+        |          |__ Remote's IP address in brackets that fail2ban needs for firewalling
+        |
+        |__ Fixed "ERROR:" string to key off of
+
+1.00 - Aug 25, 2018
+===================
+
+  Release version
+

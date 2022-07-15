@@ -92,6 +92,8 @@ void Log(const char *msg, ...) {
 
     // Log message with date/time followed by message
     fprintf(G_logfp, "%s MAILRECV[%ld]: ", datestr, (long)getpid());
+    // Fail2ban filtering: show remote ip after pid in every line of log output
+    ISLOG("F") fprintf(G_logfp, "[%s] ", G_remoteip);
     vfprintf(G_logfp, msg, ap); // append caller's error to logfile
     fflush(G_logfp);            // flush after each line
 
@@ -1212,8 +1214,8 @@ command_done:
     fflush(stdout);
 
     // Log what commands were used
-    ISLOG("F") Log("INFO: [%s] connection closed. smtp_cmd_flags=0x%04lx\n", 
-                   G_remoteip, smtp_cmd_flags);
+    ISLOG("F") Log("INFO: connection closed. smtp_cmd_flags=0x%04lx\n",
+                   smtp_cmd_flags);
 
     if ( quit ) {
         // Normal end to session
