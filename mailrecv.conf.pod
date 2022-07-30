@@ -130,19 +130,19 @@ Example:
 =item limit.connection_secs <val> <emsg>
 
 Limits the amount of time a remote can take to complete the SMTP
-transaction and QUIT. This prevents a remote from leaving connections
-open for too long.
+session and QUIT. This prevents a remote from taking too long.
 
 <val> is the maximum number of seconds before the connection is closed
-due to inactivity. Value must be greater than 1.
+due to inactivity. Value must be greater than 1. Default 300.
 
 <emsg> is the error message that is sent to the remote when the maximum
 is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+Default is: 500 Connection timeout
 
 Example:
 
-    limit.connection_secs 600   500 Connection timeout
-                          ---   ----------------------------
+    limit.connection_secs 300   500 Connection timeout
+                          ---   ----------------------
                           Value Error message
 
 =item limit.smtp_data_size  <val> <emsg>

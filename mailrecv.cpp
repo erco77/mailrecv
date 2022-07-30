@@ -36,6 +36,7 @@
 #include <netdb.h>      // gethostbyaddr()
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/file.h>   // flock()
 #include <pthread.h>    // pthread_create() for execution timer
 #include <string>
 #include <vector>
@@ -46,6 +47,7 @@ using namespace std;
 #define LINE_LEN        4096
 #define CRLF            "\r\n"         // RFC 821 (GLOSSARY) / RFC 822 (APPENDIX D)
 #define CONFIG_FILE     "/etc/mailrecv.conf"
+#define PROGNAME        "MAILRECV"
 
 // Check for log flags
 #define ISLOG(s) if (G_debugflags[0] && (G_debugflags[0]=='a'||strpbrk(G_debugflags,s)))
@@ -57,31 +59,33 @@ char        G_remoteip[80];            // Remote's IP address
 char       *G_logfilename = NULL;      // log filename if configured (if NULL, uses syslog)
 FILE       *G_logfp = NULL;            // log file pointer (remains open for duration of process)
 
-// Log a message...
-//     Note: msg can contain '%m', which is replaced with strerror(errno)
-//     You MUST include a trailing \n in msg for consistent logging.
+// LOCK THE LOG FILE FOR WRITING/ROTATING
+//    Lock the log for pthread safety.
+//    Returns -1 on error, error msg sent to stderr
 //
-void Log(const char *msg, ...) {
-    va_list ap;
-    va_start(ap, msg);
-    if ( !G_logfilename ) {         // No logfile specified?
-        vsyslog(LOG_ERR, msg, ap);  // Use syslog..
-        va_end(ap);
-        return;
+int LogLock() {
+    if ( !G_logfp || G_logfp == stderr ) return(0); // reasons /not/ to lock
+    if ( flock(fileno(G_logfp), LOCK_EX) < 0 ) {
+        fprintf(stderr, "%s: LogLock(): flock(LOCK_EX): %s", PROGNAME, strerror(errno));
+	return(-1);
     }
-    // Logfile specified? Append caller's msg to that file
-    if ( G_logfp == NULL ) {     // Log not open yet? Open it first
-        int prev_errno = errno;  // save previous errno first (in case caller using %m)
-        if ( (G_logfp = fopen(G_logfilename, "a")) == NULL ) {  // open logfile
-            syslog(LOG_ERR, "%s: %m", G_logfilename);           // Error? use syslog to log file error, and..
-            errno = prev_errno;                                 // restore errno for caller (in case %m used), and..
-            vsyslog(LOG_ERR, msg, ap);                          // log caller's error last
-            va_end(ap);
-            return;
-        }
-        errno = prev_errno;
-    }
+    return(0);
+}
 
+// UNLOCK THE LOG FILE
+//    Returns -1 on error, error msg sent to stderr
+//
+int LogUnlock() {
+    if ( !G_logfp || G_logfp == stderr ) return(0); // reasons /not/ to lock
+    if ( flock(fileno(G_logfp), LOCK_UN) < 0 ) {
+        fprintf(stderr, "%s: LogUnlock(): flock(LOCK_UN): %s", PROGNAME, strerror(errno));
+	return(-1);
+    }
+    return(0);
+}
+
+// Log prefix: each line in log prefixed by this string (date/time/etc)
+void GetLogPrefix(string &return_msg) {
     // Get current time/date as a string
     time_t    secs;		// Current UNIX time
     struct tm *date;		// Current date/time
@@ -90,13 +94,53 @@ void Log(const char *msg, ...) {
     date = localtime(&secs);
     strftime(datestr, sizeof(datestr), "%c", date);
 
-    // Log message with date/time followed by message
-    fprintf(G_logfp, "%s MAILRECV[%ld]: ", datestr, (long)getpid());
+    ostringstream os;
+    // Log date/time/pid
+    os << datestr << " " << PROGNAME << "[" << getpid() << "]: ";
     // Fail2ban filtering: show remote ip after pid in every line of log output
-    ISLOG("F") fprintf(G_logfp, "[%s] ", G_remoteip);
-    vfprintf(G_logfp, msg, ap); // append caller's error to logfile
-    fflush(G_logfp);            // flush after each line
+    ISLOG("F") os << "[" << G_remoteip << "] ";
+    // Return result
+    return_msg = os.str();
+}
 
+// Log a message...
+//     Note: msg can contain '%m', which is replaced with strerror(errno)
+//     You MUST include a trailing \n in msg for consistent logging.
+//
+void Log(const char *msg, ...) {
+    va_list ap;
+    va_start(ap, msg);
+
+    if ( !G_logfilename ) {         // No logfile specified?
+        vsyslog(LOG_ERR, msg, ap);  // Use syslog..
+        va_end(ap);
+        return;
+    }
+
+    LogLock();
+/*LCK*/ // Logfile specified? Append caller's msg to that file
+/*LCK*/ if ( G_logfp == NULL ) {     // Log not open yet? Open it first
+/*LCK*/     int prev_errno = errno;  // save previous errno first (in case caller using %m)
+/*LCK*/     if ( (G_logfp = fopen(G_logfilename, "a")) == NULL ) {  // open logfile
+/*LCK*/         syslog(LOG_ERR, "%s: %m", G_logfilename);           // Error? use syslog to log file error, and..
+/*LCK*/         errno = prev_errno;                                 // restore errno for caller (in case %m used), and..
+/*LCK*/         vsyslog(LOG_ERR, msg, ap);                          // log caller's error last
+/*LCK*/         va_end(ap);
+/*LCK*/         LogUnlock();
+/*LCK*/         return;
+/*LCK*/     }
+/*LCK*/     errno = prev_errno;
+/*LCK*/ }
+/*LCK*/
+/*LCK*/ // Log prefix
+/*LCK*/ {
+/*LCK*/     string logprefix;
+/*LCK*/     GetLogPrefix(logprefix);
+/*LCK*/     fprintf(G_logfp, "%s", logprefix.c_str());
+/*LCK*/ }
+/*LCK*/ vfprintf(G_logfp, msg, ap); // append caller's error to logfile
+/*LCK*/ fflush(G_logfp);            // flush after each line
+    LogUnlock();
     va_end(ap);
 }
 
@@ -295,7 +339,6 @@ struct AllowGroup {
 //     TODO: This should be moved to a separate file.
 //
 class Configure {
-    int maxsecs;                                    // maximum seconds program should run before stopping
     char loghex;                                    // 1=log binary chars in HEX, 0=no hex translation
     string domain;                                  // domain our server should know itself as (e.g. "example.com")
                                                     // and accept email messages for.
@@ -338,7 +381,6 @@ class Configure {
 
 public:
     Configure() {
-        maxsecs    = 300;
         loghex     = 0;                             // loghex [default: off]
         domain     = "example.com";
         deadletter_file = "/dev/null";              // must be set to "something"
@@ -359,7 +401,6 @@ public:
     }
 
     // Accessors
-    int MaxSecs() const { return maxsecs; }
     int LogHex() const { return loghex; }
     int LimitSmtpAscii() const { return limit_smtp_ascii; }
     const char *Domain() const { return domain.c_str(); }
@@ -549,15 +590,15 @@ public:
             //     Note: Our combo of fgets() and sscanf() with just %s is safe from overruns;
             //     line[] is limited to LINE_LEN by fgets(), so arg1/arg2 must be shorter.
             //
-            if ( sscanf(line, "domain %s", arg1) == 1 ) {
+            if ( sscanf(line, "domain %300s", arg1) == 1 ) {
                 domain = arg1;
-            } else if ( sscanf(line, "debug %s", arg1) == 1 ) {
+            } else if ( sscanf(line, "debug %1024s", arg1) == 1 ) {
                 if ( !G_debugflags[0] ) {   // no command line override?
                     if ( strcmp(arg1, "-") != 0 ) {
                         G_debugflags = (const char*)strdup(arg1);
                     }
                 }
-            } else if ( sscanf(line, "loghex %8s", arg1) == 1 ) {
+            } else if ( sscanf(line, "loghex %1024s", arg1) == 1 ) {
                 int onoff = OnOff(arg1);
                 if ( onoff < 0 ) {      // error?
                     Log("ERROR: '%s' (LINE %d): 'loghex %s' expected (on|off)\n",
@@ -566,7 +607,7 @@ public:
                     continue;
                 }
                 loghex = onoff;
-            } else if ( sscanf(line, "logfile %s", arg1) == 1 ) {
+            } else if ( sscanf(line, "logfile %1024s", arg1) == 1 ) {
                 if ( G_logfilename == 0 ) { // no command line override?
                     if ( strcmp(arg1, "syslog") == 0 ) {
                         G_logfilename = 0;
@@ -575,49 +616,49 @@ public:
                         G_logfilename = strdup(arg1);
                     }
                 }
-            } else if ( sscanf(line, "limit.smtp_commands %s %[^\n]", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "limit.smtp_commands %1024s %1024[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_smtp_commands) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_commands_emsg = arg2;
-            } else if ( sscanf(line, "limit.smtp_unknowncmd %s %[^\n]", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "limit.smtp_unknowncmd %1024s %1024[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_smtp_unknowncmd) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_unknowncmd_emsg = arg2;
-            } else if ( sscanf(line, "limit.smtp_failcmds %s %[^\n]", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "limit.smtp_failcmds %1024s %1024[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_smtp_failcmds) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_failcmds_emsg = arg2;
-            } else if ( sscanf(line, "limit.connection_secs %s %[^\n]", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "limit.connection_secs %1024s %1024[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_connection_secs) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_connection_secs_emsg = arg2;
-            } else if ( sscanf(line, "limit.smtp_data_size %s %[^\n]", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "limit.smtp_data_size %1024s %1024[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_smtp_data_size) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_data_size_emsg = arg2;
-            } else if ( sscanf(line, "limit.smtp_rcpt_to %s %[^\n]", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "limit.smtp_rcpt_to %1024s %1024[^\n]", arg1, arg2) == 2 ) {
                 if ( sscanf(arg1, "%ld", &limit_smtp_rcpt_to) != 1 ) {
                     Log("ERROR: '%s' (LINE %d): '%s' not an integer\n", conffile, linenum, arg1);
                     err = -1;
                     continue;
                 }
                 limit_smtp_rcpt_to_emsg = arg2;
-            } else if ( sscanf(line, "limit.smtp_ascii %s %[^\n]", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "limit.smtp_ascii %1024s %1024[^\n]", arg1, arg2) == 2 ) {
                 int onoff = OnOff(arg1);
                 if ( onoff < 0 ) {      // error?
                     Log("ERROR: '%s' (LINE %d): 'limit.smtp_ascii %s' expected (on|off)\n",
@@ -627,20 +668,20 @@ public:
                 }
                 limit_smtp_ascii      = onoff;
                 limit_smtp_ascii_emsg = arg2;
-            } else if ( sscanf(line, "deadletter_file %s", arg1) == 1 ) {
+            } else if ( sscanf(line, "deadletter_file %1024s", arg1) == 1 ) {
                 deadletter_file = arg1;
-            } else if ( sscanf(line, "allowgroup %s %s", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "allowgroup %1024s %1024s", arg1, arg2) == 2 ) {
                 string emsg;
                 if ( AddAllowGroup(arg1, arg2, emsg) < 0 ) {
                     Log("ERROR: '%s' (LINE %d): %s\n", conffile, linenum, emsg.c_str());
                     err = -1;
                     continue;
                 }
-            } else if ( sscanf(line, "deliver rcpt_to %s append %s", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "deliver rcpt_to %1024s append %1024s", arg1, arg2) == 2 ) {
                 deliver_rcpt_to_file_allowgroups.push_back("*");
                 deliver_rcpt_to_file_address.push_back(arg1);
                 deliver_rcpt_to_file_filename.push_back(arg2);
-            } else if ( sscanf(line, "deliver allowgroup %s rcpt_to %s append %s", arg1, arg2, arg3) == 3 ) {
+            } else if ( sscanf(line, "deliver allowgroup %1024s rcpt_to %1024s append %1024s", arg1, arg2, arg3) == 3 ) {
                 if ( IsAllowGroupDefined(arg1) < 0 ) {
                     Log("ERROR: '%s' (LINE %d): allowgroup '%s' is undefined\n", conffile, linenum, arg1);
                     err = -1;
@@ -649,11 +690,11 @@ public:
                 deliver_rcpt_to_file_allowgroups.push_back(arg1);
                 deliver_rcpt_to_file_address.push_back(arg2);
                 deliver_rcpt_to_file_filename.push_back(arg3);
-            } else if ( sscanf(line, "deliver rcpt_to %s pipe %[^\n]", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "deliver rcpt_to %1024s pipe %1024[^\n]", arg1, arg2) == 2 ) {
                 deliver_rcpt_to_pipe_allowgroups.push_back("*");
                 deliver_rcpt_to_pipe_address.push_back(arg1);
                 deliver_rcpt_to_pipe_command.push_back(arg2);
-            } else if ( sscanf(line, "deliver allowgroup %s rcpt_to %s pipe %[^\n]", arg1, arg2, arg3) == 3 ) {
+            } else if ( sscanf(line, "deliver allowgroup %1024s rcpt_to %1024s pipe %1024[^\n]", arg1, arg2, arg3) == 3 ) {
                 if ( IsAllowGroupDefined(arg1) < 0 ) {
                     Log("ERROR: '%s' (LINE %d): allowgroup '%s' is undefined\n", conffile, linenum, arg1);
                     err = -1;
@@ -662,7 +703,7 @@ public:
                 deliver_rcpt_to_pipe_allowgroups.push_back(arg1);
                 deliver_rcpt_to_pipe_address.push_back(arg2);
                 deliver_rcpt_to_pipe_command.push_back(arg3);
-            } else if ( sscanf(line, "error rcpt_to %s %[^\n]", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "error rcpt_to %1024s %1024[^\n]", arg1, arg2) == 2 ) {
                 int ecode;
                 // Make sure error message includes 3 digit SMTP error code
                 if ( sscanf(arg2, "%d", &ecode) != 1 ) {
@@ -677,7 +718,7 @@ public:
                 }
                 errors_rcpt_to_regex.push_back(arg1);
                 errors_rcpt_to_message.push_back(arg2);
-            } else if ( sscanf(line, "replace rcpt_to %s %s", arg1, arg2) == 2 ) {
+            } else if ( sscanf(line, "replace rcpt_to %1024s %1024s", arg1, arg2) == 2 ) {
                 // Make sure regex compiles..
                 if ( RegexMatch(arg1, "x") == -1 ) {
                     Log("ERROR: '%s' (LINE %d): bad 'replace rcpt_to' regex '%s'\n", conffile, linenum, arg1);
@@ -685,7 +726,7 @@ public:
                 }
                 replace_rcpt_to_regex.push_back(arg1);
                 replace_rcpt_to_after.push_back(arg2);
-            } else if ( sscanf(line, "allow remotehost %s", arg1) == 1 ) {
+            } else if ( sscanf(line, "allow remotehost %1024s", arg1) == 1 ) {
                 // Make sure regex compiles..
                 if ( RegexMatch(arg1, "x") == -1 ) {
                     Log("ERROR: '%s' (LINE %d): bad 'allow remotehost' regex '%s'\n", conffile, linenum, arg1);
@@ -705,7 +746,6 @@ public:
             Log("DEBUG: --- Config file:\n");
             Log("DEBUG:    debug: %s\n", G_debugflags);
             Log("DEBUG:    logfile: '%s'\n", G_logfilename);
-            Log("DEBUG:    maxsecs: %d\n", MaxSecs());
             Log("DEBUG:    loghex: %d\n", LogHex());
             Log("DEBUG:    domain: '%s'\n", Domain());
             Log("DEBUG:    deadletter_file: '%s'\n", DeadLetterFile());
@@ -857,22 +897,27 @@ public:
 
     // Child thread for execution timer
     static void *ChildExecutionTimer(void *data) {
-        long secs = long(data);
-        sleep(secs);
+        Configure *self = (Configure*)data; // no lock needed; conf loaded before timer started
+        string emsg = self->limit_connection_secs_emsg; emsg += "\n";
+        long secs = long(self->limit_connection_secs);
+        sleep(secs);                        // use sleep() for timer
         // Timer expired? Send message to remote and exit immediately
-        const char *emsg = "500 Connection timeout (forcing close)\n";
-        write(1, emsg, strlen(emsg));
+        write(1, emsg.c_str(), strlen(emsg.c_str()));
+        // Log to stderr from child thread
+        Log(emsg.c_str());
         exit(0);
     }
 
     // Start execution timer thread
+    //    Use thread (instead of fork()) so child reports proper PID in log msgs.
+    //
     void StartExecutionTimer() {
         static pthread_t dataready_tid = 0;
         if ( dataready_tid != 0 ) return;   // only run once
         pthread_create(&dataready_tid,
                        NULL,
                        ChildExecutionTimer,
-                       (void*)limit_connection_secs);
+                       (void*)this);
     }
 };
 
