@@ -1,3 +1,10 @@
+1.14 - Jul 29, 2022
+===================
+   > Remove unused maxsecs (limit.connection_secs instead)
+   > Limits conf file load sscanf()'s
+   > Logs timeout errors, added Log locking for thread safety
+   > Decreased default limit.connection_secs: 600s -> 300s
+
 1.13 - Jul 15, 2022
 ===================
 
