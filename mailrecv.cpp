@@ -901,10 +901,11 @@ public:
         string emsg = self->limit_connection_secs_emsg; emsg += "\n";
         long secs = long(self->limit_connection_secs);
         sleep(secs);                        // use sleep() for timer
+        // Log to stderr from child thread
+        //    Write to log first -- write() to remote may hang if fail2ban banned it
+        Log(emsg.c_str());
         // Timer expired? Send message to remote and exit immediately
         write(1, emsg.c_str(), strlen(emsg.c_str()));
-        // Log to stderr from child thread
-        Log(emsg.c_str());
         exit(0);
     }
 
@@ -914,10 +915,7 @@ public:
     void StartExecutionTimer() {
         static pthread_t dataready_tid = 0;
         if ( dataready_tid != 0 ) return;   // only run once
-        pthread_create(&dataready_tid,
-                       NULL,
-                       ChildExecutionTimer,
-                       (void*)this);
+        pthread_create(&dataready_tid, NULL, ChildExecutionTimer, (void*)this);
     }
 };
 
