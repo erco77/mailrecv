@@ -68,17 +68,19 @@ INSTALL INSTRUCTIONS
         service smtp
         {
              socket_type         = stream
+             protocol            = tcp
+             flags               = IPv6            ; optional -- v1.20 and up
              wait                = no
              nice                = 10
              user                = mail
              server              = /usr/sbin/mailrecv
              server_args         = -c /etc/mailrecv.conf
-             instances           = 4
+             instances           = 10
              log_on_success     += PID HOST DURATION
         }
 
-    With that, tell xinetd to reload, and connections to port 25
-    will cause mailrecv to handle the connection. 
+    With that added, restart xinetd (e.g. '/etc/init.d/xinetd restart')
+    and connections to port 25 will cause mailrecv to handle the connection. 
 
     With this configuration, you will only see xinetd in the process
     table unless there's an active SMTP connection in progress, as xinetd
@@ -117,8 +119,6 @@ INSTALL INSTRUCTIONS
         quit
 
 CONFIGURATION
-
-    TBD.
 
     See the mailrecv.conf and mailrecv-test.conf for examples of how to
     configure. Perl regular expressions are used for pattern matching
@@ -197,6 +197,69 @@ CONFIGURATION
 
         deliver rcpt_to myarchive@mydomain.com pipe /some/command -arg
         deliver rcpt_to status@mydomain.com append /var/tmp/somestatus.txt
+
+    FAIL2BAN CONFIGURATION
+
+    Fail2ban filters are up to the administrator, but here's a few example
+    filters to get started.
+
+    First, it's important that one configure mailrecv to log to a file
+    (such as /var/log/mailrecv.log) and to ensure the 'F' flag is specified
+    for the 'debug' flags, e.g.
+
+        logfile /var/log/mailrecv.log
+        debug   srw+F
+
+    When you configure mailrecv to log to /var/log/mailrecv.log, you should
+    configure logrotate(1) to manage rotating it daily. To do this,
+    create the file /etc/logrotate.d/mailrecv:
+
+        /var/log/mailrecv.log {
+           daily
+           rotate 8
+           missingok
+           create        644 mail mail
+           su            root root
+           compress
+           delaycompress
+           prerotate
+               ( date="`/bin/date`"; /bin/echo "--- Log rotated: $date" >> /var/log/mailrecv.log )
+           endscript
+           postrotate
+               ( date="`/bin/date`"; /bin/echo "--- Log rotated: $date" >> /var/log/mailrecv.log )
+           endscript
+        }
+
+    Now to configure a new fail2ban filter, add a new filter to jail.local,
+    and then create a filter file in /etc/fail2ban/filter.d/mailrecv-bad.conf.
+
+    This example blocks attempts to send mail to addresses that don't exist.
+    Add to the bottom of your '/etc/fail2ban/jail.local' file:
+
+        [mailrecv-bad]
+            enabled     = true
+            filter      = mailrecv-bad
+            action      = iptables-multiport[name=mail_bad, port="smtp"]
+            logpath     = /var/log/mailrecv.log
+            logencoding = utf-8
+            bantime     = 3600
+            maxretry    = 2
+
+    Then create the filter file '/etc/fail2ban/filter.d/mailrecv-bad.conf':
+
+        # Ban clients sending email to non-existant addresses. Errors of the form:
+        # ERROR: [1.2.3.4] 550 No one here by that name..
+        [Definition] 
+            failregex   = ^.* \[<HOST>\] ERROR: 550 No one here
+            ignoreregex = 
+
+    Then enable the new filter by running:
+
+        fail2ban-client start mailrecv-bad
+
+    And whenever you tweak the settings, you can tell fail2ban to reload it:
+
+        fail2ban-client reload mailrecv-bad
 
 DOCUMENTATION
 

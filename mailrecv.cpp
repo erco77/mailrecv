@@ -45,19 +45,20 @@
 using namespace std;
 
 #define LINE_LEN        4096
-#define CRLF            "\r\n"         // RFC 821 (GLOSSARY) / RFC 822 (APPENDIX D)
+#define CRLF            "\r\n"            // RFC 821 (GLOSSARY) / RFC 822 (APPENDIX D)
 #define CONFIG_FILE     "/etc/mailrecv.conf"
 #define PROGNAME        "MAILRECV"
+#define USE_IPV6                          // enable ipv6 remotes
 
 // Check for log flags
 #define ISLOG(s) if (G_debugflags[0] && (G_debugflags[0]=='a'||strpbrk(G_debugflags,s)))
 
 ///// GLOBALS /////
-const char *G_debugflags = "";         // debug logging flags (see mailrecv.conf for description)
-char        G_remotehost[256];         // Remote's hostname
-char        G_remoteip[80];            // Remote's IP address
-char       *G_logfilename = NULL;      // log filename if configured (if NULL, uses syslog)
-FILE       *G_logfp = NULL;            // log file pointer (remains open for duration of process)
+const char *G_debugflags = "";            // debug logging flags (see mailrecv.conf for description)
+char        G_remotehost[256];            // Remote's hostname
+char        G_remoteip[INET6_ADDRSTRLEN]; // Remote's IP address
+char       *G_logfilename = NULL;         // log filename if configured (if NULL, uses syslog)
+FILE       *G_logfp = NULL;               // log file pointer (remains open for duration of process)
 
 // LOCK THE LOG FILE FOR WRITING/ROTATING
 //    Lock the log for pthread safety.
@@ -934,6 +935,33 @@ Configure G_conf;
 //    -1 -- could not determine any remote info
 //
 int GetRemoteHostInfo(FILE *fp) {
+#ifdef USE_IPV6
+    struct sockaddr_storage raddr;
+    socklen_t len = sizeof raddr;
+    if ( getpeername(fileno(fp), (struct sockaddr*)&raddr, &len) == 0 ) {
+        struct hostent *he;
+        // Get remote IPV4/IPV6 address
+        if (raddr.ss_family == AF_INET) {    // ipv4
+            struct sockaddr_in *s = (struct sockaddr_in *)&raddr;
+            socklen_t sin_size = sizeof(sockaddr_in);
+            inet_ntop(AF_INET, &s->sin_addr, G_remoteip, sizeof G_remoteip);
+            he = gethostbyaddr((void*)&(s->sin_addr), sin_size, AF_INET);
+        } else {                            // ipv6
+            struct sockaddr_in6 *s = (struct sockaddr_in6 *)&raddr;
+            socklen_t sin6_size = sizeof(sockaddr_in6);
+            inet_ntop(AF_INET6, &s->sin6_addr, G_remoteip, sizeof G_remoteip);
+            he = gethostbyaddr((void*)&(s->sin6_addr), sin6_size, AF_INET6);
+        }
+        if ( he ) sprintf(G_remotehost, "%.*s", int(sizeof(G_remotehost))-1, he->h_name);
+        else      strcpy(G_remotehost, "???");
+        return 0;
+    }
+    // Non-fatal, i.e. if testing from a shell
+    Log("WARNING: getpeername() couldn't determine remote IP address: %m\n");
+    strcpy(G_remotehost, "???");
+    strcpy(G_remoteip,   "?.?.?.?");
+    return -1;
+#else
     struct sockaddr_in raddr;
     socklen_t raddr_size = sizeof(raddr);
     if ( getpeername(fileno(fp), (struct sockaddr*)&raddr, &raddr_size) == 0 ) {
@@ -956,6 +984,7 @@ int GetRemoteHostInfo(FILE *fp) {
         return -1;
     }
     return 0;
+#endif
 }
 
 // Truncate string at first CR|LF

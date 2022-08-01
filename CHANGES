@@ -1,3 +1,11 @@
+1.20 - Aug 1, 2022
+==================
+   > Added IPV6 support
+
+1.15 - Jul 31, 2022
+===================
+   > On timeouts, log error before sending msg to remote
+
 1.14 - Jul 29, 2022
 ===================
    > Remove unused maxsecs (limit.connection_secs instead)
