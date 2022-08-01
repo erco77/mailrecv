@@ -261,6 +261,43 @@ CONFIGURATION
 
         fail2ban-client reload mailrecv-bad
 
+TESTING
+    
+    To verify xinetd is listening on ipv6 port 25, you can use:
+
+        $ netstat -lnt
+        Active Internet connections (only servers)
+        Proto Recv-Q Send-Q Local Address           Foreign Address         State      
+        tcp        0      0 127.0.0.1:174           0.0.0.0:*               LISTEN     
+        tcp6       0      0 :::80                   :::*                    LISTEN     
+    --> tcp6       0      0 :::25                   :::*                    LISTEN <--
+        tcp6       0      0 :::443                  :::*                    LISTEN 
+
+    You can use netcat to test SMTP commands, e.g.
+
+        $ nc yourhost 25           -- connect to mailrecv port 25
+        HELO yourhost            -- say hello
+        QUIT
+
+   You can also test mail addresses using any of the supported
+   RFC 822 commands, e.g. "RCPT TO:", etc.
+
+   To test ipv6, you can use the following on a machine that has
+   an ipv6 internet address:
+
+       $ nc -6 yourhost 25        -- force ipv6 (if available)
+       HELP
+       QUIT
+
+   ..with that, you should see ipv6 style addresses in the log, e.g.
+
+       :
+       Mon Aug  1 12:40:13 2022 MAILRECV[30276]: [2607:f220::d85c:1234] SMTP connection from remote host somehost.com [2607:f220::d85c:1234]
+       Mon Aug  1 12:40:13 2022 MAILRECV[30276]: [2607:f440::d85c:1234] DEBUG: SMTP reply: 220 serissdev.seriss.com SMTP (RFC 822)
+       Mon Aug  1 12:40:15 2022 MAILRECV[30276]: [2607:f440::d85c:1234] DEBUG: SMTP cmd: HELP
+       :                                          --------------------
+   
+
 DOCUMENTATION
 
     TBD. Should be a perldoc so it can be a manpage or html.

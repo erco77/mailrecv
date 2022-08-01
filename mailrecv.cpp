@@ -33,7 +33,7 @@
 #include <syslog.h>     // syslog()
 #include <pcre.h>       // perl regular expressions API (see 'man pcreapi(3)')
 #include <sys/socket.h> // getpeername()
-#include <netdb.h>      // gethostbyaddr()
+#include <netdb.h>      // gethostbyaddr(), NI_MAXHOST..
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/file.h>   // flock()
@@ -936,24 +936,56 @@ Configure G_conf;
 //
 int GetRemoteHostInfo(FILE *fp) {
 #ifdef USE_IPV6
+    strcpy(G_remoteip, "?.?.?.?");
+    strcpy(G_remotehost, "???");
+
     struct sockaddr_storage raddr;
     socklen_t len = sizeof raddr;
     if ( getpeername(fileno(fp), (struct sockaddr*)&raddr, &len) == 0 ) {
-        struct hostent *he;
-        // Get remote IPV4/IPV6 address
-        if (raddr.ss_family == AF_INET) {    // ipv4
-            struct sockaddr_in *s = (struct sockaddr_in *)&raddr;
-            socklen_t sin_size = sizeof(sockaddr_in);
-            inet_ntop(AF_INET, &s->sin_addr, G_remoteip, sizeof G_remoteip);
-            he = gethostbyaddr((void*)&(s->sin_addr), sin_size, AF_INET);
-        } else {                            // ipv6
-            struct sockaddr_in6 *s = (struct sockaddr_in6 *)&raddr;
-            socklen_t sin6_size = sizeof(sockaddr_in6);
-            inet_ntop(AF_INET6, &s->sin6_addr, G_remoteip, sizeof G_remoteip);
-            he = gethostbyaddr((void*)&(s->sin6_addr), sin6_size, AF_INET6);
+        int gnierr;
+
+        switch (raddr.ss_family) {
+            case AF_INET: { // ipv4
+                struct sockaddr_in  *sa      = (struct sockaddr_in*)&raddr;
+                socklen_t            sa_size = sizeof(struct sockaddr_in);
+                if ( inet_ntop(raddr.ss_family, &(sa->sin_addr), G_remoteip, sizeof G_remoteip) == NULL ) {
+                    strcpy(G_remoteip, "?.?.?.?");
+                    Log("inet_ntop(AF_INET): %m\n");
+                }
+                // Reverse lookup
+                if ( (gnierr = getnameinfo((struct sockaddr*)sa, sa_size, G_remotehost, sizeof G_remotehost,
+                                           NULL, 0, NI_NAMEREQD)) != 0 ) {
+                    strcpy(G_remotehost, "???");
+                    Log("getnameinfo(%s): [ipv4] %s\n", G_remoteip, gai_strerror(gnierr));
+                }
+                break;
+            }
+            case AF_INET6: { // ipv6
+                struct sockaddr_in6 *sa6      = (struct sockaddr_in6*)&raddr;
+                socklen_t            sa6_size = sizeof(struct sockaddr_in6);
+                if ( inet_ntop(raddr.ss_family, &(sa6->sin6_addr), G_remoteip, sizeof G_remoteip) == NULL ) {
+                    strcpy(G_remoteip, "?.?.?.?");
+                    Log("inet_ntop(AF_INET6): %m\n");
+                }
+                // Reverse lookup
+                if ( (gnierr = getnameinfo((struct sockaddr*)sa6, sa6_size, G_remotehost, sizeof G_remotehost,
+                                           NULL, 0, NI_NAMEREQD) ) != 0 ) {
+                    strcpy(G_remotehost, "???");
+                    Log("getnameinfo(%s): [ipv6] %s\n", G_remoteip, gai_strerror(gnierr));
+                }
+                break;
+            }
+            default:        // shouldn't happen
+                break;
         }
-        if ( he ) sprintf(G_remotehost, "%.*s", int(sizeof(G_remotehost))-1, he->h_name);
-        else      strcpy(G_remotehost, "???");
+
+        // XXX: Sometimes inet_ntop() comes back with an ipv4 address in ipv6 syntax,
+        //      e.g. "::ffff:212.193.29.62. Convert back to ipv4 address.
+        //
+        int a,b,c,d;
+        if ( sscanf(G_remoteip, "::ffff:%d.%d.%d.%d", &a, &b, &c, &d) == 4 ) {
+            sprintf(G_remoteip, "%d.%d.%d.%d", a, b, c, d);
+        }
         return 0;
     }
     // Non-fatal, i.e. if testing from a shell
@@ -1332,7 +1364,6 @@ void HelpAndExit() {
 }
 
 int main(int argc, const char *argv[]) {
-    GetRemoteHostInfo(stdin);
 
     // Force bourne shell for popen(command)..
     setenv("SHELL", "/bin/sh", 1);
@@ -1386,6 +1417,9 @@ int main(int argc, const char *argv[]) {
         Log("ERROR: '%s' has errors (above): told remote 'Cannot receive email at this time'\n", conffile);
         return 1;       // fail
     }
+
+    // Do this AFTER loading config, so we can Log() errors properly..
+    GetRemoteHostInfo(stdin);
 
     // Log remote host connection AFTER config loaded
     //     ..in case config sets 'logfile'
