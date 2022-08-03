@@ -956,7 +956,8 @@ int GetRemoteHostInfo(FILE *fp) {
                 if ( (gnierr = getnameinfo((struct sockaddr*)sa, sa_size, G_remotehost, sizeof G_remotehost,
                                            NULL, 0, NI_NAMEREQD)) != 0 ) {
                     strcpy(G_remotehost, "???");
-                    Log("getnameinfo(%s): [ipv4] %s\n", G_remoteip, gai_strerror(gnierr));
+                    ISLOG("w")      // often remotes have no reverse lookups
+                        Log("getnameinfo(%s): [ipv4] %s\n", G_remoteip, gai_strerror(gnierr));
                 }
                 break;
             }
@@ -971,7 +972,8 @@ int GetRemoteHostInfo(FILE *fp) {
                 if ( (gnierr = getnameinfo((struct sockaddr*)sa6, sa6_size, G_remotehost, sizeof G_remotehost,
                                            NULL, 0, NI_NAMEREQD) ) != 0 ) {
                     strcpy(G_remotehost, "???");
-                    Log("getnameinfo(%s): [ipv6] %s\n", G_remoteip, gai_strerror(gnierr));
+                    ISLOG("w")      // often remotes have no reverse lookups
+                        Log("getnameinfo(%s): [ipv6] %s\n", G_remoteip, gai_strerror(gnierr));
                 }
                 break;
             }
