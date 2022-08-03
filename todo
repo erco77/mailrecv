@@ -1,13 +1,10 @@
 
 * * * fltkdev
-> reimplement AsciiHexEncode() to use std::string to avoid malloc()/free()
+
+> (???) reimplement AsciiHexEncode() to use std::string to avoid malloc()/free()
 
 (WIP) Make a mailrecv.conf.8 manpage w/pod2man
       Still left to do: document all those delivery and error commands.
-
-(DONE) Make a mailrecv.8 manpage w/pod2man -- use 'plain old documentation' (POD)
-
-(DONE) Reimplement ascii_smtp as a limit.smtp_ascii
 
 > Double check for RFC 5321 compliances, etc.
 
@@ -27,6 +24,12 @@
 		for <afile@fltkdev.fltk.org>; Mon, 24 Sep 2018 06:39:33 -0400 (EDT)
 
 > Add 'deny <host|ip>'
+
+> Add 'allowconnect +group +group..'
+  ..which if specified should ONLY allow those in the +groups specified to connect,
+  and should send an error and close to any remotes NOT in those groups, e.g.
+
+	500 You are not configured to deliver mail here.
 
 > Docs??
 
@@ -104,4 +107,10 @@ NO. HELL NO
   NO: 
   NO:   In all cases, data passed to the script is on stdin
   NO:   All error output from python script should probably be piped to logger(1)
+
+====
+
+(DONE) Make a mailrecv.8 manpage w/pod2man -- use 'plain old documentation' (POD)
+
+(DONE) Reimplement ascii_smtp as a limit.smtp_ascii
 

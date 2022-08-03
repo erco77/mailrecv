@@ -925,62 +925,51 @@ Configure G_conf;
 // Minimum commands we must support:
 //      HELO MAIL RCPT DATA RSET NOOP QUIT VRFY
 
-// Return with remote's ip address + hostname in globals
-//    Sets globals: G_remotehost, G_remoteip
+// Return peer's IP address (ipv4 or ipv6) in sockaddr_storage and as a string
+//     Returns 0 on success, with raddr and ipstr set to remote's address and ip string.
+//     Returns -1 on fatal error, emsg has reason, raddr + ipstr undefined.
+//     Returns -2 on warning, emsg has reason to log, raddr may be set or zeroed, ipstr is "?.?.?.?".
 //
-//    fp -- tcp connection as a FILE* (typically stdin because xinetd invoked us)
-//
-// Returns:
-//     0 -- success (got IP for sure, may or may not have gotten remote hostname)
-//    -1 -- could not determine any remote info
-//
-int GetRemoteHostInfo(FILE *fp) {
-#ifdef USE_IPV6
-    strcpy(G_remoteip, "?.?.?.?");
-    strcpy(G_remotehost, "???");
-
-    struct sockaddr_storage raddr;
-    socklen_t len = sizeof raddr;
-    if ( getpeername(fileno(fp), (struct sockaddr*)&raddr, &len) == 0 ) {
-        int gnierr;
-
+int GetRemoteIP(int fd,                             //  IN: socket to remote
+                struct sockaddr_storage &raddr,     // OUT: remote's address info
+                char *ipstr,                        // OUT: remote's ip address as a string (ipv4/6)
+                int   ipstr_size,                   //  IN: ip address string's max size
+                string &emsg) {                     // OUT: error message (if any)
+    struct sockaddr *sa      = (struct sockaddr*)&raddr;
+    socklen_t        sa_size = sizeof(struct sockaddr_storage); // allows for ipv6
+    if ( getpeername(fd, sa, &sa_size) == 0 ) {
         switch (raddr.ss_family) {
             case AF_INET: { // ipv4
-                struct sockaddr_in  *sa      = (struct sockaddr_in*)&raddr;
-                socklen_t            sa_size = sizeof(struct sockaddr_in);
-                if ( inet_ntop(raddr.ss_family, &(sa->sin_addr), G_remoteip, sizeof G_remoteip) == NULL ) {
-                    strcpy(G_remoteip, "?.?.?.?");
-                    Log("inet_ntop(AF_INET): %m\n");
-                }
-                // Reverse lookup
-                if ( (gnierr = getnameinfo((struct sockaddr*)sa, sa_size, G_remotehost, sizeof G_remotehost,
-                                           NULL, 0, NI_NAMEREQD)) != 0 ) {
-                    strcpy(G_remotehost, "???");
-                    ISLOG("w")      // often remotes have no reverse lookups
-                        Log("getnameinfo(%s): [ipv4] %s\n", G_remoteip, gai_strerror(gnierr));
+                struct sockaddr_in  *sai = (struct sockaddr_in*)sa;
+                //socklen_t            sai_size = sizeof(struct sockaddr_in);
+                if ( inet_ntop(raddr.ss_family, &(sai->sin_addr), ipstr, ipstr_size) == NULL ) {
+                    strcpy(ipstr, "?.?.?.?");
+                    emsg = string("inet_ntop(AF_INET): ")
+                         + string(strerror(errno));
+                    return -2;
                 }
                 break;
             }
             case AF_INET6: { // ipv6
-                struct sockaddr_in6 *sa6      = (struct sockaddr_in6*)&raddr;
-                socklen_t            sa6_size = sizeof(struct sockaddr_in6);
-                if ( inet_ntop(raddr.ss_family, &(sa6->sin6_addr), G_remoteip, sizeof G_remoteip) == NULL ) {
-                    strcpy(G_remoteip, "?.?.?.?");
-                    Log("inet_ntop(AF_INET6): %m\n");
-                }
-                // Reverse lookup
-                if ( (gnierr = getnameinfo((struct sockaddr*)sa6, sa6_size, G_remotehost, sizeof G_remotehost,
-                                           NULL, 0, NI_NAMEREQD) ) != 0 ) {
-                    strcpy(G_remotehost, "???");
-                    ISLOG("w")      // often remotes have no reverse lookups
-                        Log("getnameinfo(%s): [ipv6] %s\n", G_remoteip, gai_strerror(gnierr));
+                struct sockaddr_in6 *sai6 = (struct sockaddr_in6*)sa;
+                //socklen_t            sai6_size = sizeof(struct sockaddr_in6);
+                if ( inet_ntop(raddr.ss_family, &(sai6->sin6_addr), ipstr, ipstr_size) == NULL ) {
+                    strcpy(ipstr, "?.?.?.?");
+                    emsg = string("inet_ntop(AF_INET6): ")
+                         + string(strerror(errno));
+                    return -2;
                 }
                 break;
             }
-            default:        // shouldn't happen
-                break;
+            default: {      // shouldn't happen
+                ostringstream os;
+                os << "unknown internet protocol family ("
+                   << (int)raddr.ss_family << ")";
+                emsg = os.str();
+                strcpy(ipstr, "?.?.?.?");
+                return -1;
+            }
         }
-
         // XXX: Sometimes inet_ntop() comes back with an ipv4 address in ipv6 syntax,
         //      e.g. "::ffff:212.193.29.62. Convert back to ipv4 address.
         //
@@ -991,34 +980,93 @@ int GetRemoteHostInfo(FILE *fp) {
         return 0;
     }
     // Non-fatal, i.e. if testing from a shell
-    Log("WARNING: getpeername() couldn't determine remote IP address: %m\n");
-    strcpy(G_remotehost, "???");
-    strcpy(G_remoteip,   "?.?.?.?");
-    return -1;
-#else
-    struct sockaddr_in raddr;
-    socklen_t raddr_size = sizeof(raddr);
-    if ( getpeername(fileno(fp), (struct sockaddr*)&raddr, &raddr_size) == 0 ) {
-        // Get remote IP address string
-        sprintf(G_remoteip, "%.*s", int(sizeof(G_remoteip))-1, inet_ntoa(raddr.sin_addr));
-        // Get remote Hostname string
-        struct hostent *he;
-        if ( ( he = gethostbyaddr((struct addr_in*)&(raddr.sin_addr),
-                                sizeof(raddr.sin_addr), AF_INET) ) ) {
-            sprintf(G_remotehost, "%.*s", int(sizeof(G_remotehost))-1, he->h_name);
-        } else {
-            strcpy(G_remotehost, "???");
+    emsg = string("getpeername(): couldn't determine remote IP address: ")
+         + string(strerror(errno));
+    memset(sa, 0, sa_size);
+    return -2;
+}
+
+// Return peer's remote address as a hostname (if possible)
+//     Returns 0 on success, with remhost set to the remote host's name
+//     Returns -1 on error, emsg has reason to log, rhost set to "???"
+//
+int GetRemoteHostname(struct sockaddr_storage &raddr, // IN: remote address
+                      const char *remip,              // IN: remote ip as a string
+                      char *remhost,                  // OUT: remote hostname
+                      size_t remhost_size,            // IN: remote hostname's size
+                      string &emsg) {                 // OUT: error msg, if any
+    int gnierr;
+    switch (raddr.ss_family) {
+        case AF_INET: { // ipv4
+            // Reverse lookup
+            struct sockaddr *sa = (struct sockaddr*)&raddr;
+            socklen_t        sa_size = sizeof(struct sockaddr_in);
+            if ( (gnierr = getnameinfo(sa, sa_size,
+                                       remhost, remhost_size,
+                                       NULL, 0, NI_NAMEREQD)) != 0 ) {
+                strcpy(remhost, "???");
+                emsg = string("getnameinfo(") + string(remip)
+                     + string("): [ipv4] ")   + string(gai_strerror(gnierr));
+                return -1;
+            }
+            return 0;
         }
-        return 0;
-    } else {
-        // Non-fatal, i.e. if testing from a shell
-        Log("WARNING: getpeername() couldn't determine remote IP address: %m\n");
-        strcpy(G_remotehost, "???");
-        strcpy(G_remoteip,   "?.?.?.?");
-        return -1;
+        case AF_INET6: { // ipv6
+            // Reverse lookup
+            struct sockaddr *sa6 = (struct sockaddr*)&raddr;
+            socklen_t        sa6_size = sizeof(struct sockaddr_in6);
+            if ( (gnierr = getnameinfo(sa6, sa6_size,
+                                       remhost, remhost_size,
+                                       NULL, 0, NI_NAMEREQD)) != 0 ) {
+                strcpy(remhost, "???");
+                emsg = string("getnameinfo(") + string(remip)
+                     + string("): [ipv6] ")   + string(gai_strerror(gnierr));
+                return -1;
+            }
+            return 0;
+        }
     }
+
+    // Unknown IP family - shouldn't happen
+    ostringstream os;
+    os << "unknown internet protocol family ("
+       << (int)raddr.ss_family << ")";
+    emsg = os.str();
+    strcpy(remhost, "???");
+    return -1;
+}
+
+// Return with remote's ip address + hostname in globals
+//    Sets globals: G_remotehost, G_remoteip
+//
+//    fp -- tcp connection as a FILE* (typically stdin because xinetd invoked us)
+//
+// Returns:
+//     0 -- success (got IP for sure, may or may not have gotten remote hostname)
+//    -1 -- could not determine any remote info
+//
+int GetRemoteHostInfo(int fd) {
+    strcpy(G_remoteip, "?.?.?.?");
+    strcpy(G_remotehost, "???");
+
+    struct sockaddr_storage raddr;
+    string emsg;
+
+    // Get remote's address and ip string
+    int ret;
+    if ( (ret=GetRemoteIP(fd, raddr, G_remoteip, sizeof(G_remoteip), emsg)) < 0 ) {
+        strcpy(G_remoteip, "?.?.?.?");
+        Log("%s\n", emsg.c_str());
+        if ( ret == -1 ) return -1;     // error, not a warning
+    }
+
+    // Get remote's hostname (reverse lookup on address)
+    if ( (ret=GetRemoteHostname(raddr, G_remoteip, G_remotehost, sizeof(G_remotehost), emsg)) < 0 ) {
+        strcpy(G_remotehost, "???");
+        Log("%s\n", emsg.c_str());      // warning only: many remotes fail reverse lookups
+    }
+
     return 0;
-#endif
 }
 
 // Truncate string at first CR|LF
@@ -1421,7 +1469,7 @@ int main(int argc, const char *argv[]) {
     }
 
     // Do this AFTER loading config, so we can Log() errors properly..
-    GetRemoteHostInfo(stdin);
+    GetRemoteHostInfo(fileno(stdin));
 
     // Log remote host connection AFTER config loaded
     //     ..in case config sets 'logfile'
