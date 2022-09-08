@@ -1124,6 +1124,25 @@ int SMTP_ReadLetter(FILE *fp,                    // [in] connection to remote
 //     0 -- success
 //     1 -- failure
 //
+// The following are the SMTP commands: (RFC 821 4.1.2)
+//
+//            COMMAND ARGUMENT                            MAILRECV?
+//            ------- ---------------------------------   ---------
+//            HELO <SP> <domain> <CRLF>                   YES
+//            MAIL <SP> FROM:<reverse-path> <CRLF>        YES
+//            RCPT <SP> TO:<forward-path> <CRLF>          YES
+//            DATA <CRLF>                                 YES
+//            RSET <CRLF>                                 YES
+//            SEND <SP> FROM:<reverse-path> <CRLF>        no
+//            SOML <SP> FROM:<reverse-path> <CRLF>        no
+//            SAML <SP> FROM:<reverse-path> <CRLF>        no
+//            VRFY <SP> <string> <CRLF>                   YES
+//            EXPN <SP> <string> <CRLF>                   no
+//            HELP [<SP> <string>] <CRLF>                 YES
+//            NOOP <CRLF>                                 YES
+//            QUIT <CRLF>                                 YES
+//            TURN <CRLF>                                 no
+//
 int HandleSMTP() {
     vector<string> letter;              // array for received email (SMTP "DATA")
     char line[LINE_LEN+1],              // raw line buffer
@@ -1134,10 +1153,10 @@ int HandleSMTP() {
     vector<string> rcpt_tos;            // The remote's "RCPT TO:" value(s)
     const char *our_domain = G_conf.Domain();
 
-    // We implement RFC 822 "HELO" protocol only.. no fancy EHLO stuff.
+    // We implement RFC 821 "HELO" protocol only.. no fancy EHLO stuff.
     {
         ostringstream os;
-        os << "220 " << our_domain << " SMTP (RFC 822)";    // TODO -- allow custom identity to be specified
+        os << "220 " << our_domain << " SMTP (RFC 821/822)";    // TODO -- allow custom identity to be specified
         SMTP_Reply(os.str().c_str());
     }
 
@@ -1321,8 +1340,8 @@ rcpt_to:
             smtp_cmd_flags |= 0x0100;
             SMTP_Reply("214-Help:");
             SMTP_Reply("214-HELO, DATA, RSET, NOOP, QUIT,");
-            SMTP_Reply("214-MAIL FROM:,  RCPT TO:,");
-            SMTP_Reply("214 VRFY, EXPN, EHLO, SEND, SOML, SAML, TURN");
+            SMTP_Reply("214-MAIL FROM:, RCPT TO:, VRFY, HELP,");
+            SMTP_Reply("214 EXPN, SEND, SOML, SAML, TURN");
         } else if ( ISCMD("EXPN") ) {
             smtp_cmd_flags |= 0x0200;
 no_support:

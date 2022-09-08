@@ -87,31 +87,31 @@ with the contents:
 You should then be able to test by connecting to port 25 (smtp)
 using 'netcat', e.g.
 
-        $ nc localhost 25				<-- run this to connect to mailrecv
-	220 mydomain.com SMTP (RFC 822) mailrecv	<-- mailrecv's response
-	help						<-- type 'help' and hit ENTER
-	214 Help:                                       \
-	    HELO, DATA, RSET, NOOP, QUIT,                |__ mailrecv responds with the
-	    MAIL FROM:,  RCPT TO:,                       |   smtp commands it supports
-	    VRFY, EXPN, EHLO, SEND, SOML, SAML, TURN    /
-	quit						<-- type 'quit' and hit ENTER
-	221 fltk.org closing connection                 <-- mailrecv finishes
-	$
+        $ nc localhost 25                               <-- run this to connect to mailrecv
+        220 mydomain.com SMTP (RFC 821/822) mailrecv    <-- mailrecv's response
+        help                                            <-- type 'help' and hit ENTER
+        214 Help:                                       \
+            HELO, DATA, RSET, NOOP, QUIT,                |__ mailrecv responds with the
+            MAIL FROM:, RCPT TO:, VRFY, HELP,            |   smtp commands it supports
+            EXPN, SEND, SOML, SAML, TURN                /
+        quit                                            <-- type 'quit' and hit ENTER
+        221 fltk.org closing connection                 <-- mailrecv finishes
+        $
 
 To test delivery:
 
         $ nc localhost 25
-	helo mydomain.com
-	mail from: <me@mydomain.com>		-- angle brackets required
-	rcpt to: <me@mydomain.com>		-- angle brackets required
-	data
-	From: Me <me@mydomain.com>
-	Subject: Test
+        helo mydomain.com
+        mail from: <me@mydomain.com>            -- angle brackets required
+        rcpt to: <me@mydomain.com>              -- angle brackets required
+        data
+        From: Me <me@mydomain.com>
+        Subject: Test
 
-	Test message line 1.
-	Test line 2.
-	.
-	quit
+        Test message line 1.
+        Test line 2.
+        .
+        quit
         $
 
 =head1 EXAMPLE COMMAND LINES
@@ -158,7 +158,7 @@ To test delivery:
 
 =head1 LIMITATIONS
 
-mailrecv only supports RFC 822. 
+mailrecv only supports RFC 821/822. 
 
 No EHLO, authentication, or any of the newer SMTP extensions..
 just straight old school SMTP.
