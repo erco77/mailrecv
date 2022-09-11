@@ -48,7 +48,6 @@ using namespace std;
 #define CRLF            "\r\n"            // RFC 821 (GLOSSARY) / RFC 822 (APPENDIX D)
 #define CONFIG_FILE     "/etc/mailrecv.conf"
 #define PROGNAME        "MAILRECV"
-#define USE_IPV6                          // enable ipv6 remotes
 
 // Check for log flags
 #define ISLOG(s) if (G_debugflags[0] && (G_debugflags[0]=='a'||strpbrk(G_debugflags,s)))
