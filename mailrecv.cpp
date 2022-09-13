@@ -973,8 +973,8 @@ int GetRemoteIP(int fd,                             //  IN: socket to remote
         //      e.g. "::ffff:212.193.29.62. Convert back to ipv4 address.
         //
         int a,b,c,d;
-        if ( sscanf(G_remoteip, "::ffff:%d.%d.%d.%d", &a, &b, &c, &d) == 4 ) {
-            sprintf(G_remoteip, "%d.%d.%d.%d", a, b, c, d);
+        if ( sscanf(ipstr, "::ffff:%d.%d.%d.%d", &a, &b, &c, &d) == 4 ) {
+            sprintf(ipstr, "%d.%d.%d.%d", a, b, c, d);
         }
         return 0;
     }
