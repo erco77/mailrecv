@@ -51,6 +51,24 @@ BUILD INSTRUCTIONS
     ..this creates the mailrecv executable that is then used by xinetd
     to start handling SMTP connections. (see INSTALL instructions below)
         
+HOW IT WORKS
+
+    Email comes in on port 25 via the unix xinetd service, which then
+    passes the network connection to mailrecv on stdin, where mailrecv
+    can access the TCP connection info about the remote's IP, etc.
+
+    The email then passes through the configured rules in the mailrecv.conf
+    file to determine how to deliver the email.
+
+    mailrecv determines how to deliver the email based on the SMTP
+    "RCPT To:" information, and ideally does some verification of
+    the remote's IP address to determine if the sender is legit to
+    prevent spam injections.
+
+    This diagram shows how a message might be delivered:
+    
+![delivery diagram](https://raw.githubusercontent.com/erco77/mailrecv/master/images/mailrecv-success.png)
+
 INSTALL INSTRUCTIONS
 
     Basically configure an /etc/xinetd.d file to configure mailrecv
