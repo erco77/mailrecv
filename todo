@@ -1,4 +1,9 @@
 
+> Add dns double check for safety
+  IP -> DNS name -> IP, then check the two IPs match.
+  Beware of ipv4 vs ipv6 issues; walk all matches to be sure not to miss
+  a match due to multiple names for same interface.
+
 * * * fltkdev
 
 > (???) reimplement AsciiHexEncode() to use std::string to avoid malloc()/free()
