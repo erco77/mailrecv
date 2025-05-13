@@ -3,8 +3,9 @@
 //
 // mailrecv.cpp -- xinetd tool to act as a simple SMTP server
 //
-//     We just append letters to valid recipients to either a file
-//     or pipe based on the RCPT TO: address.
+//     Internet facing mail server that directs letters to valid
+//     local recipients either directly to a file or a command pipe
+//     based on RCPT TO: address.
 //
 // Copyright 2018 Greg Ercolano
 //
@@ -260,18 +261,35 @@ int AppendMailToFile(const char *mail_from,         // SMTP 'mail from:'
                      const char *rcpt_to,           // SMTP 'rcpt to:'
                      const vector<string>& letter,  // email contents, including headers, blank line, body
                      const string& filename) {      // filename to append to
+    bool locked = false;
     FILE *fp;
+    // Open file for append
     ISLOG("f") Log("DEBUG: fopen(%s,'a')\n", filename.c_str());
     if ( (fp = fopen(filename.c_str(), "a")) == NULL) {
         Log("ERROR: can't append to %s: %m\n", filename.c_str());   // %m: see syslog(3)
         return -1;  // fail
     }
+    // Lock file
+    if ( flock(fileno(fp), LOCK_EX) == 0 ) {
+        locked = true;
+    } else {
+        fprintf(stderr, "%s: AppendMailToFile(): flock(LOCK_EX): %s", PROGNAME, strerror(errno));
+        locked = false; // continue anyway
+    }
+    // Append letter
     fprintf(fp, "From %s\n", mail_from);            // XXX: perhaps unneeded; useful as a message separator
     for ( size_t t=0; t<letter.size(); t++ ) {
         fprintf(fp, "%s\n", letter[t].c_str());
     }
+    fprintf(fp, "\n");
+    // Unlock (if locked)
+    if ( locked && flock(fileno(fp), LOCK_UN) < 0 ) {
+        fprintf(stderr, "%s: AppendMailToFile(): flock(LOCK_UN): %s", PROGNAME, strerror(errno));
+    }
+    // Close file
     int ret = fclose(fp);
     ISLOG("f") Log("DEBUG: fclose() returned %d\n", ret);
+
     return 1;       // success
 }
 
