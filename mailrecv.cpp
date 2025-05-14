@@ -417,7 +417,7 @@ public:
         limit_smtp_rcpt_to         = 5;
         limit_smtp_rcpt_to_emsg    = "452 Too many recipients.";    // RFC 2821 4.5.3.1
         limit_smtp_ascii           = OnOff("on");                   // ascii-only smtp cmd strings [default: on]
-        limit_smtp_ascii_emsg      = "500 Binary data (non-ASCII) unsupported";
+        limit_smtp_ascii_emsg      = "500 Binary data (non-ASCII) unsupported.";
     }
 
     // Accessors

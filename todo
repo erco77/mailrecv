@@ -4,6 +4,11 @@
   Beware of ipv4 vs ipv6 issues; walk all matches to be sure not to miss
   a match due to multiple names for same interface.
 
+> Add an option to fail all email addresses not configured.
+  Currently the only way for a "rcpt to" to fail is if
+  there's an "error" address configured to specifically fail.
+  All other email addresses simply go to the dead letter file.
+
 * * * fltkdev
 
 > (???) reimplement AsciiHexEncode() to use std::string to avoid malloc()/free()

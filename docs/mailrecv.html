@@ -1,0 +1,236 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<style>
+    body {
+        font-family: Arial,Sans;
+    }
+</style>
+<table><tr>
+    <td style="font-size:30px; font-weight:bold;" width=1%  align=center>mailrecv(8)</td>
+    <td style="font-size:30px; font-weight:bold;" width=50% align=center>Small Simple SMTP Mail Server</td>
+    <td style="font-size:30px; font-weight:bold;" width=1%  align=center>mailrecv(8)</td>
+</tr></table>
+<title>mailrecv - a simple SMTP xinetd daemon</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<link rev="made" href="mailto:root@localhost" />
+</head>
+
+<body>
+
+
+
+<ul id="index">
+  <li><a href="#NAME">NAME</a></li>
+  <li><a href="#SYNOPSIS">SYNOPSIS</a></li>
+  <li><a href="#DESCRIPTION">DESCRIPTION</a></li>
+  <li><a href="#EXAMPLE-etc-xinetd.d-smtp-FILE">EXAMPLE /etc/xinetd.d/smtp FILE</a></li>
+  <li><a href="#EXAMPLE-COMMAND-LINES">EXAMPLE COMMAND LINES</a></li>
+  <li><a href="#SEE-ALSO">SEE ALSO</a></li>
+  <li><a href="#LIMITATIONS">LIMITATIONS</a></li>
+  <li><a href="#REPORTING-BUGS">REPORTING BUGS</a></li>
+  <li><a href="#AUTHORS">AUTHORS</a></li>
+  <li><a href="#COPYRIGHT">COPYRIGHT</a></li>
+  <li><a href="#NO-WARRANTY">NO WARRANTY</a></li>
+</ul>
+
+<h1 id="NAME">NAME</h1>
+
+<p>mailrecv - a simple SMTP xinetd daemon</p>
+
+<h1 id="SYNOPSIS">SYNOPSIS</h1>
+
+<dl>
+
+<dt id="mailrecv--c-config-file--d-logflags--l-syslog-path"><b>mailrecv</b> [ -c <i>config-file</i> ] [ -d &lt;logflags&gt; ] [ -l syslog|path ]</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="DESCRIPTION">DESCRIPTION</h1>
+
+<p>mailrecv is a simple/dumb xinetd oriented SMTP listener that simply accepts emails in and writes the received email to either a file or pipe based on the recipient. Multiple recipients can be configured.</p>
+
+<p>Since it&#39;s an xinetd oriented tool, it reads stdin/writes stdout, expecting those to be a TCP connection prepared by xinetd listening on an SMTP port, to act like an SMTP server to receive incoming emails.</p>
+
+<p>NOT INTENDED FOR NORMAL MAIL DELIVERY OR RELAYING. This is a dedicated tool for /just/ accepting emails and writing the received messages to either a file or a pipe, depending on the configured allowed recipient(s).</p>
+
+<p>Options supported by mailrecv:</p>
+
+<dl>
+
+<dt id="c-configfile">-c configfile</dt>
+<dd>
+
+<p>Specifies an alternate mailrecv.conf config file to load. Default is /etc/mailrecv.conf.</p>
+
+</dd>
+<dt id="d-logflags">-d &lt;logflags|-&gt;</dt>
+<dd>
+
+<p>Specifies debug logging flags. This overrides any settings for &#39;debug&#39; in the config file.</p>
+
+<p>&lt;logflags&gt; can be one or more of these single letter flags:</p>
+
+<pre><code>    - -- disables all debug logging
+    a -- all (enables all optional flags)
+    c -- show config file loading process
+    s -- show SMTP commands remote sent us
+    l -- show email contents as it&#39;s received (SMTP &#39;DATA&#39; command&#39;s input)
+    r -- show regex pattern match checks
+    f -- show all open/close operations on files/pipes
+    w -- log non-essential warnings
+    F -- fail2ban style error messages (that include IP on same line)
+    + -- logs MAIL FROM/TO commands</code></pre>
+
+</dd>
+<dt id="l-syslog-filename">-l syslog|filename</dt>
+<dd>
+
+<p>Sets where log output is written. Default uses syslog(3). &#39;filename&#39; can either be the path to a file that we append to, or /dev/tty if you want to see the output on your terminal for interactive debugging.</p>
+
+</dd>
+</dl>
+
+<h1 id="EXAMPLE-etc-xinetd.d-smtp-FILE">EXAMPLE /etc/xinetd.d/smtp FILE</h1>
+
+<p>Normally mailrecv runs as a daemon triggered by xinetd(8).</p>
+
+<p>To configure xinetd to run mailrecv, just create /etc/xinetd.d/smtp with the contents:</p>
+
+<pre><code>        service smtp
+        {
+             socket_type     = stream
+             protocol        = tcp
+             wait            = no
+             nice            = 10
+             user            = news
+             server          = /usr/sbin/mailrecv
+             server_args     = -c /etc/mailrecv.conf
+             instances       = 10
+             log_on_success  += PID HOST DURATION
+        }</code></pre>
+
+<p>You should then be able to test by connecting to port 25 (smtp) using &#39;netcat&#39;, e.g.</p>
+
+<pre><code>        $ nc localhost 25                               &lt;-- run this to connect to mailrecv
+        220 mydomain.com SMTP (RFC 821/822) mailrecv    &lt;-- mailrecv&#39;s response
+        help                                            &lt;-- type &#39;help&#39; and hit ENTER
+        214 Help:                                       _
+            HELO, DATA, RSET, NOOP, QUIT,                |__ mailrecv responds with the
+            MAIL FROM:, RCPT TO:, VRFY, HELP,            |   smtp commands it supports
+            EXPN, SEND, SOML, SAML, TURN                _|
+        quit                                            &lt;-- type &#39;quit&#39; and hit ENTER
+        221 fltk.org closing connection                 &lt;-- mailrecv finishes
+        $</code></pre>
+
+<p>To test delivery:</p>
+
+<pre><code>        $ nc localhost 25
+        helo mydomain.com
+        mail from: &lt;me@mydomain.com&gt;            -- angle brackets required
+        rcpt to: &lt;me@mydomain.com&gt;              -- angle brackets required
+        data
+        From: Me &lt;me@mydomain.com&gt;
+        Subject: Test
+
+        Test message line 1.
+        Test line 2.
+        .
+        quit
+        $</code></pre>
+
+<h1 id="EXAMPLE-COMMAND-LINES">EXAMPLE COMMAND LINES</h1>
+
+<pre><code> Normal Execution As Daemon
+ --------------------------
+ This is how the daemon should normally run to accept connections.
+ The -c /etc/mailrecv.conf is optional, but helps for administration
+ clarity as to the location of the config file:
+
+    /usr/sbin/mailrecv -c /etc/mailrecv.conf
+
+ Interactive Debugging
+ ---------------------
+ These commands would be used if one wants to test mailrecv from
+ the command line, not as a daemon, but interactively typing smtp
+ commands directly into stdin and seeing results and log output
+ in your terminal session:
+
+    mailrecv -d srF -c mailrecv-test.conf -l /var/log/mailrecv.log
+    mailrecv -d c   -c mailrecv-test.conf -l /dev/tty     # log to your terminal</code></pre>
+
+<h1 id="SEE-ALSO">SEE ALSO</h1>
+
+<dl>
+
+<dt id="mailrecv.conf-5----configuration-file-for-mailrecv-8">mailrecv.conf(5) -- configuration file for mailrecv(8)</dt>
+<dd>
+
+</dd>
+<dt id="RFC-821.txt----SMTP-Protocol-1982-Postel">RFC-821.txt -- SMTP Protocol (1982) Postel</dt>
+<dd>
+
+</dd>
+<dt id="RFC-822.txt----Email-Standard-1982-Crocker">RFC-822.txt -- Email Standard (1982) Crocker</dt>
+<dd>
+
+</dd>
+<dt id="RFC-2821.txt----SMTP-Protocol-2001-Klensin">RFC-2821.txt -- SMTP Protocol (2001) Klensin</dt>
+<dd>
+
+</dd>
+<dt id="RFC-2822.txt----Internet-Message-Format-2001-Resnick">RFC-2822.txt -- Internet Message Format (2001) Resnick</dt>
+<dd>
+
+</dd>
+<dt id="RFC-5321.txt----SMTP-Protocol-2008-Klensin">RFC-5321.txt -- SMTP Protocol (2008) Klensin</dt>
+<dd>
+
+</dd>
+<dt id="RFC-5322.txt----Internet-Message-Format-2008-Resnick">RFC-5322.txt -- Internet Message Format (2008) Resnick</dt>
+<dd>
+
+</dd>
+<dt id="RFC-6854.txt----Update-to-RFC-5322-2013-Leiba">RFC-6854.txt -- Update to RFC 5322 (2013) Leiba</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="LIMITATIONS">LIMITATIONS</h1>
+
+<p>mailrecv only supports RFC 821/822.</p>
+
+<p>No EHLO, authentication, or any of the newer SMTP extensions.. just straight old school SMTP.</p>
+
+<h1 id="REPORTING-BUGS">REPORTING BUGS</h1>
+
+<p>Report bugs using the github issue page for the mailrecv project: https://github.com/erco77/mailrecv/issues</p>
+
+<h1 id="AUTHORS">AUTHORS</h1>
+
+<dl>
+
+<dt id="Greg-Ercolano-Los-Angeles-Calif.-USA">Greg Ercolano, Los Angeles, Calif. USA</dt>
+<dd>
+
+</dd>
+</dl>
+
+<h1 id="COPYRIGHT">COPYRIGHT</h1>
+
+<p><i>mailrecv</i> is copyright 2019 by Greg Ercolano. This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public; see LICENSE included with the mailrecv source code.</p>
+
+<h1 id="NO-WARRANTY">NO WARRANTY</h1>
+
+<p>This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License &#39;LICENSE&#39; file for details.</p>
+
+
+</body>
+
+</html>
+
+

@@ -26,8 +26,9 @@ man: mailrecv.pod mailrecv.conf.pod
 
 # Build html pages
 html: mailrecv.pod mailrecv.conf.pod
-	pod2html mailrecv.pod      > mailrecv.html
-	pod2html mailrecv.conf.pod > mailrecv.conf.html
+	pod2html mailrecv.pod      | perl -w ./html-prefilter.pl mailrecv      > mailrecv.html
+	pod2html mailrecv.conf.pod | perl -w ./html-prefilter.pl mailrecv.conf > mailrecv.conf.html
+	cp mailrecv.html mailrecv.conf.html docs/
 
 # GIT OPERATIONS
 commit: FORCE

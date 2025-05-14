@@ -90,10 +90,10 @@ using 'netcat', e.g.
         $ nc localhost 25                               <-- run this to connect to mailrecv
         220 mydomain.com SMTP (RFC 821/822) mailrecv    <-- mailrecv's response
         help                                            <-- type 'help' and hit ENTER
-        214 Help:                                       \
+        214 Help:                                       _
             HELO, DATA, RSET, NOOP, QUIT,                |__ mailrecv responds with the
             MAIL FROM:, RCPT TO:, VRFY, HELP,            |   smtp commands it supports
-            EXPN, SEND, SOML, SAML, TURN                /
+            EXPN, SEND, SOML, SAML, TURN                _|
         quit                                            <-- type 'quit' and hit ENTER
         221 fltk.org closing connection                 <-- mailrecv finishes
         $
@@ -132,13 +132,13 @@ To test delivery:
  in your terminal session:
 
     mailrecv -d srF -c mailrecv-test.conf -l /var/log/mailrecv.log
-    mailrecv -d c -c mailrecv-test.conf -l /dev/tty     # log to your terminal\n"
+    mailrecv -d c   -c mailrecv-test.conf -l /dev/tty     # log to your terminal
 
 =head1 SEE ALSO
 
 =over
 
-=item L<mailrecv.conf(5)> -- configuration file for mailrecv(8)
+=item mailrecv.conf(5) -- configuration file for mailrecv(8)
 
 =item RFC-821.txt      -- SMTP Protocol (1982) Postel
 
@@ -165,7 +165,7 @@ just straight old school SMTP.
 
 =head1 REPORTING BUGS
 
-Report bugs using the github issue page for the newsd project:
+Report bugs using the github issue page for the mailrecv project:
 https://github.com/erco77/mailrecv/issues
 
 =head1 AUTHORS
@@ -178,7 +178,7 @@ https://github.com/erco77/mailrecv/issues
 
 =head1 COPYRIGHT
 
-I<newsd> is copyright 2019 by Greg Ercolano.
+I<mailrecv> is copyright 2019 by Greg Ercolano.
 This program is free software; you can redistribute it
 and/or modify it under the terms of the GNU General Public;
 see LICENSE included with the mailrecv source code.

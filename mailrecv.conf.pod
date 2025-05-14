@@ -3,24 +3,33 @@ vim: autoindent tabstop=8 shiftwidth=4 expandtab softtabstop=4
 
 =head1 NAME
 
+=over
+
 mailrecv.conf - configuration files for mailrecv(8)
 
+=back
+
 =head1 DESCRIPTION
+
+=over
 
 I<mailrecv(8)> is an xinetd daemon that manages inbound smtp
 mail delivery. It uses a config file to control its operation.
 
+=back
+
 =head1 THE MAILRECV.CONF FILE
+
+=over
 
 By default, I<mailrecv> reads the file /etc/mailrecv.conf
 to obtain the global configuration for the server. The file is
 simple text and uses the "#" character to start comments. 
-
 The following directives are supported:
 
 =over
 
-=item debug <flags>
+=item B<debug> <flags>
 
 Sets the debug logging flags.
 Can be one or more of these single letter flags.
@@ -42,7 +51,7 @@ Example:
 
     debug csr+      # show config, smtp cmds, regex matches and one line from/to info
 
-=item logfile syslog|<filename>
+=item B<logfile> syslog|<filename>
 
 Sets optional filename to append all log messages to.
 
@@ -52,64 +61,86 @@ Example:
 
     logfile /var/log/mailrecv.log
 
-=item loghex on|off
+=item B<loghex> on|off
 
 Enables logging binary data in hex, instead of as raw data.
 Helps prevent fail2ban from barfing on binary data from remotes.
 
 Default is 'off', to ensure logs reflect actual content from remote.
 
-=item domain example.com
+=item B<domain> <fqdn_domain_name>
 
 Sets the domain name for this server to know itself as.
 
 This name is used in the initial SMTP '220' reply when any new
 server connects to mailrecv.
 
-=item deadletter_file <filename>
+Example:
+
+    domain foo.bar.com
+
+=item B<deadletter_file> <filename>
 
 Where to write received email that has no configured recipient.
 This can either be a file, or /dev/null to simply throw them away.
 
 Default is /dev/null.
 
-=item limit.smtp_commands <val> <emsg>
+=item B<limit.smtp_commands> <val> <ecode> <error_message_text>
 
-Limits the number of SMTP commands the remote user can execute before
-mailrecv terminates the connection with the specified <emsg>.
+Limits the number of SMTP commands the remote user can execute to <val>,
+after which mailrecv terminates the connection with the specified
+error code <ecode> and error message <error_message_text>.
 
 <val> is the maximum number of commands allowed, and must be greater than 1.
 
-<emsg> is the error message that is sent to the remote when the maximum
-value is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+<ecode> must be a 3 digit RFC 822 compliant "reply code" (normally 500), and
+<error_message_text> must be a short, human readable error message that
+continues to the end of line.
 
-Example:
+This example shows the default:
 
-    limit.smtp_commands   25    500 Too many SMTP commands received in session
+    limit.smtp_commands   25    500 Too many SMTP commands received in session.
                           --    ----------------------------------------------
                           Value Error message
 
-=item limit.smtp_unknowncmd <val> <emsg>
+No valid SMTP transaction should take more than a few of the typical SMTP
+setup commands; typically: HELO, MAIL FROM, RCPT TO, DATA, QUIT.
 
-Limits the number of 'unknown SMTP commands' the remote is allowed to use
-before mailrecv terminates the connection with the specified <emsg>.
+There may be several RCPT TO's, one for each email address, so if you expect
+valid mailings to include a large list of RCPT TO addresses, then adjust
+<val> accordingly.
+
+=item B<limit.smtp_unknowncmd> <val> <ecode> <error_message_text>
+
+Limits the number of unknown SMTP commands the remote is allowed to make
+to <val>, after which mailrecv terminates the connection with the specified
+error code <ecode> and error message <error_message_text>.
 
 <val> is the maximum number of unknown commands allowed, and must be greater
 than 1.
 
-<emsg> is the error message that is sent to the remote when the maximum
-value is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+<ecode> must be a 3 digit RFC 822 compliant "reply code" (normally 500), and
+<error_message_text> must be a short, human readable error message that
+continues to the end of line.
 
-Example:
+Note that valid SMTP transactions shouldn't have more than one unknown
+SMTP command, which is normally the failure response to EHELO, which
+should tell the remote all it needs to know to avoid further problems.
+Only a bad client would persist with bad SMTP commands.
 
-    limit.smtp_unknowncmd 4     500 Too many bad commands
+This example shows the default:
+
+    limit.smtp_unknowncmd 4     500 Too many bad commands.
                           --    -------------------------
                           Value Error message
 
-=item limit.smtp_failcmds  <val> <emsg>
 
-Limits the number of failed SMTP commands. (e.g. email addresses that
-fail to resolve, etc)
+=item B<limit.smtp_failcmds> <val> <ecode> <error_message_text>
+
+Limits the number of valid SMTP commands that can fail (e.g. email addresses
+that fail to resolve) to <val>, after which mailrecv terminates the connection
+with the specified error code <ecode> and error message <error_message_text>.
 
 This is mainly for spam prevention, to to prevent the remote from
 trying to send a huge list of email addresses in a single connection
@@ -118,34 +149,36 @@ in the hopes of finding a few that are valid.
 <val> is the maximum number of failed commands allowed, and must be
 greater than 1.
 
-<emsg> is the error message that is sent to the remote when the maximum
-is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+<ecode> must be a 3 digit RFC 822 compliant "reply code" (normally 500), and
+<error_message_text> must be a short, human readable error message that
+continues to the end of line.
 
-Example:
+This example shows the default:
 
-    limit.smtp_failcmds   4     500 Too many failed commands
+    limit.smtp_failcmds   4     500 Too many failed commands.
                           --    ----------------------------
                           Value Error message
 
-=item limit.connection_secs <val> <emsg>
+=item B<limit.connection_secs> <val> <ecode> <error_message_text>
 
-Limits the amount of time a remote can take to complete the SMTP
-session and QUIT. This prevents a remote from taking too long.
+Limits the number of seconds the remote can take to complete its
+SMTP transactions and QUIT. This prevents a remote from taking too long.
 
 <val> is the maximum number of seconds before the connection is closed
-due to inactivity. Value must be greater than 1. Default 300.
+due to inactivity, the error code and error message sent before disconnecting.
+Value must be greater than 1.
 
-<emsg> is the error message that is sent to the remote when the maximum
-is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
-Default is: 500 Connection timeout
+<ecode> must be a 3 digit RFC 822 compliant "reply code" (normally 500), and
+<error_message_text> must be a short, human readable error message that
+continues to the end of line.
 
-Example:
+This example shows the default:
 
-    limit.connection_secs 300   500 Connection timeout
-                          ---   ----------------------
+    limit.connection_secs 600   500 Connection timeout.
+                          ---   -----------------------
                           Value Error message
 
-=item limit.smtp_data_size  <val> <emsg>
+=item B<limit.smtp_data_size> <ecode> <error_message_text>
 
 Limits the number of bytes that can be sent as part of an SMTP "DATA" command,
 limiting how large of an email payload can be sent. 
@@ -157,16 +190,17 @@ image attachments, contact info vcards, html mime content, etc.
 and on completion <emsg> is sent as the error reply, indicating the message
 would not be delivered. Value must be greater than 1.
 
-<emsg> is the error message that is sent to the remote when the maximum
-is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+<ecode> must be a 3 digit RFC 822 compliant "reply code" (normally 500), and
+<error_message_text> must be a short, human readable error message that
+continues to the end of line.
 
-Example:
+This example shows the default:
 
-    limit.smtp_data_size  24000000 552 Too much mail data
-                          -------- ----------------------------
+    limit.smtp_data_size  24000000 552 Too much mail data.
+                          -------- -----------------------
                           Value    Error message
 
-=item limit.smtp_rcpt_to  <val> <emsg>
+=item B<limit.smtp_rcpt_to> <val> <ecode> <error_message_text>
 
 Limits the number of "RCPT TO:" commands we can receive, before failing
 with the error in <emsg>
@@ -174,55 +208,91 @@ with the error in <emsg>
 <val> is the maximum number of commands. If exceeded, <emsg> is sent
 in response to this, and all subsequent RCPT TO commands.
 
-<emsg> is the error message that is sent to the remote when the maximum
-is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+<ecode> must be a 3 digit RFC 822 compliant "reply code" (normally 500), and
+<error_message_text> must be a short, human readable error message that
+continues to the end of line.
 
-Example:
+This example shows the default:
 
-    limit.smtp_rcpt_to    5     452 Too many recipients (RFC 2821 4.5.3.1)
-                          ---   ------------------------------------------
+    limit.smtp_rcpt_to    5     452 Too many recipients.
+                          ---   ------------------------
                           Value Error message
 
-=item limit.smtp_ascii <on|off> <emsg>
+=item B<limit.smtp_ascii> <on|off> <ecode> <error_message_text>
 
-When enabled, all SMTP commands and command arguments must be ASCII only,
-as defined by RFC 822 4.2.1.  Any non-ASCII content in a SMTP command will
-cause <esmg> as the reply, and the command will be ignored. UTF-8 content
-can trip this error, since values above 0x7e are considered non-ASCII as per
-RFC 822.
+All SMTP commands and command arguments must be ASCII only, as defined
+by RFC 822 4.2.1.  Any non-ASCII content in a SMTP command will cause
+an error, sending <ecode> and <error_message_text> to the remote to
+indicate the failure, and the command will be ignored. UTF-8 content
+can trip this error, since values above 0x7e are considered non-ASCII
+as per RFC 822.
 
 Generally, arguments to smtp commands are either domain names or email
 addresses, both of which should not contain utf8 strings, so this should
 be safe to leave on.
 
-The main thrust of this feature is to prevent remotes from sending binary
-data to attack/confuse logging, and tools that monitor logs such as fail2ban.
-
 When enabled, this does NOT affect email payload sent as part of a DATA command.
 
+The main thrust of this feature is to prevent remotes from sending binary
+data to attack/confuse logging, or confuse monitoring tools like fail2ban.
+
 <val> is either 'on' or 'off'. If 'on', non-ASCII content trips the error msg
-response in <emsg>, the command is ignored, and counts as a 'failed command'.
+response, the command is ignored, and counts as a 'failed command'.
 
-<emsg> is the error message that is sent to the remote when the maximum
-is exceeded, including the 3 digit RFC 822 compliant 'reply code' prefix.
+<ecode> must be a 3 digit RFC 822 compliant "reply code" (normally 500), and
+<error_message_text> must be a short, human readable error message that
+continues to the end of line.
 
-Example:
+This example shows the default:
 
-    limit.smtp_ascii  on    500 Binary data (non-ASCII) unsupported
-                      ---   ---------------------------------------
+    limit.smtp_ascii  on    500 Binary data (non-ASCII) unsupported.
+                      ---   ----------------------------------------
                       Value Error message
 
-=item allowgroup <name> <regex>
+=item B<error rcpt_to> <regex> <ecode> <error_response_text>
 
-Builds an 'allowgroup' with the name <name>, and appends <regex> to that group.
-The <name> can later be used in other commands so as to refer to all the <regex>'s
-defined.
+Configures any "RCPT TO" email address matching <regex> to fail with the
+specified <ecode> and <error_response_text> error message.
 
-The allowgroup <name> can then be referred to by other commands, to match all
-the <regex>s defined in that group against the remote connection's FQDN hostname
-resolved by DNS.
+Several "error" commands can be specified to allow different email addresses
+to each have their own failure message, which will help notify the sender
+of the exact reason for the failure. For example:
 
-<name> is a freeform alpha-numeric string that by convention starts with '+',
+    error rcpt_to bugs@mydomain.com           550 For reporting bugs, open a github issue for the website at http://github.com/user/project/issues
+    error rcpt_to info@mydomain.com           550 Use the google newsgroup x.y.z for asking questions. This email is disabled.
+    error rcpt_to postmaster@mydomain.com     550 Use the google newsgroup x.y.z to contact server admins. This email address is disabled.
+    error rcpt_to noreply@mydomain.com        550 This email address is called "noreply" for a reason.
+
+<regex> can include wildcards, allowing matching several addresses at once. 
+
+"error" commands are handled in the order specified, so the first match
+will be the effective one.
+
+To specify a match for all addresses, use .* as the <regex>, and specify it
+/last/ in the list of "error" commands, so any email address that don't match
+the others will be forced to fail, otherwise they'll be delivered "successfully"
+by falling through to the configured "deadletter_file" command (which defaults
+to /dev/null, silently dropping the message, making the sender thinking it was
+delivered, which is likely confusing).
+
+It is advised to /always/ include this line as the "last" error command, to
+ensure unknown email addresses fail:
+
+    error rcpt_to .* 550 No one here by that name.
+
+..which will be used for any email addresses that didn't match "deliver" or
+other "error" commands, notifying the sender of addresses that don't resolve.
+
+=item B<allowgroup> <+name> <regex>
+
+Builds an 'allowgroup' with the name <+name>, and appends the <regex> search
+string to that group to represent a string that matches valid remote ipv4,
+ipv6, or remote FQDN domain names.
+
+The allowgroup <+name> can then be referred to by other commands to match all
+the <regex>s defined in that group against the remote connection's ip/domain name.
+
+<+name> is a freeform alpha-numeric string that by convention starts with '+',
 and must not contain spaces. Preferrably all lowercase, with either underbars,
 dashes or periods in place of spaces, and avoids any other special characters
 if possible.
@@ -255,13 +325,172 @@ matches, ensuring an error is sent to the remote.
 
 Multiple allowgroups can be defined and referenced by name.
 
+=item B<deliver allowgroup> <+name> B<rcpt_to> <email_address> B<append> /some/file
+
+Configure inbound delivery of email to a particular address, <email_address> and
+append the email contents to /some/file.
+
+Note that parallel message delivery to the same email address is possible,
+so to ensure proper synchronization, an exclusive file locking is applied to
+/some/file via flock(LOCK_EX) ensuring messages aren't interwoven.
+
+=item B<deliver allowgroup> <+name> B<rcpt_to> <address> B<pipe> /some/command [args..]
+
+Configure inbound delivery of email to a particular address, <email_address> and
+pipes the email contents into the stdin of the specified command and optional
+arguments.
+
+Note that parallel execution is possible, so "/some/command" must handle its
+own locking mechanism to ensure concurrent delivery of multiple messages
+to the same email address don't interleave.
+
+In a concurrent scenario, while a message is being delivered, other concurrent
+deliveries block until the lock releases, ensuring synchronization.
+
+=item B<allow remotehost> <regex>
+
+Allow remote host connections from IPV4, IPV6, or FQDN that matches <regex>.
+
+Multiple "allow remotehost" commands can be specified to allow more than
+one host.
+
+When configured, this will limit all "deliver" commands that don't specify
+an "allowgroup", e.g.
+
+    allow remotehost ^1.2.3.4$
+    deliver rcpt_to fred@ourdomain.com append /home/fred/emails.txt
+
+When multiple "allow remotehost" commands are specified, a list is created,
+any of which can match the remote host, e.g.
+
+    allow remotehost ^1.2.3.4$
+    allow remotehost ^2001:0db8:85a3:0000:0000:8a2e:0370:7334$
+    allow remotehost ^somedomain.com$
+    allow remotehost ^anotherdomain.com$
+    deliver rcpt_to fred@ourdomain.com append /home/fred/emails.txt
+
+NOTE: For large groups of allowed servers, or email addresses that are allowed
+to accept from different servers for each address, use "allowgroup" instead.
+
+=back
+
+=back
+
+=head1 EXAMPLE: Bare Minimum mailrecv.conf / xinetd configuration
+
+=over
+
+This ultra-simple mailrecv.conf allows clients only connecting to
+the localhost address 127.0.0.1 to send emails to the single email
+address "fred@ourdomain.com", and appends those messages to the file
+/var/tmp/fredmail.txt, and rejects all else.
+
+Just follow these four steps:
+
+B<1)> Put the following in /etc/mailrecv.conf
+
+    # mailrecv.conf
+    # log SMTP commands (s) and fail2ban friendly error messages (F)
+    debug sF
+
+    # Log any binary data in hex
+    loghex on
+
+    # Sets our server's domain
+    domain ourdomain.com
+
+    # Only allow the localhost address to send mail, all else will be rejected
+    allow remotehost ^127.0.0.1$
+
+    # Allow the single email address fred@ourdomain.com to accept mail
+    # all other addresses rejected.
+    deliver rcpt_to fred@ourdomain.com append /var/tmp/fred-mail.txt
+
+    # Ensure all other RCTP TO email delivery attempts fail with this error
+    error rcpt_to .* 550 No one here by that name.
+
+Note that most settings are left unspecified for brevity, assuming the defaults.
+Normally in an actual configuration, all values would be specified explicitly.
+See the examples in the ./examples directory for real world examples.
+
+B<2)> Put the following into /etc/xinetd.d/smtp:
+
+    service smtp
+    {
+         socket_type         = stream
+         protocol            = tcp
+         flags               = IPv6
+         wait                = no
+         nice                = 10
+         user                = mail
+         server              = /usr/sbin/mailrecv
+         server_args         = -c /etc/mailrecv.conf
+         instances           = 10
+         log_on_success     += PID HOST DURATION
+    }
+
+That configures any inbound TCP connections to port 25 to invoke /usr/sbin/mailrecv
+running as the user 'mail', such that the mail file /var/tmp/fredmail.txt will be created
+and owned by that user. See the xinetd documentation for more info.
+
+B<3)> Force xinetd to reload, so it picks up the above changes.  You can either use:
+
+    /etc/init.d/xinetd restart
+
+..or the newer systemd equivalent:
+
+    systemctl reload xinetd
+
+Note that once xinetd reloads, mailrecv will begin receiving tcp connections from port 25
+on ALL the machine's network interfaces, including internet facing port 25.
+
+This means crackers who are always probing port 25 will reach mailrecv, but their
+attemps will be denied for actual mail receipt by the above mailrecv configuration
+only allows mail delivery from the localhost address, rejecting all else.
+
+So you may see live activity logged in the syslog for mailrecv, unless you've firewalled
+port 25 on the internet facing interface.
+
+B<4)> You should then be able to successfully test email delivery for the above
+configuration by running:
+
+    nc 127.0.0.1 25  << EOF
+    helo mydomain.com
+    mail from: <erco@seriss.com>
+    rcpt to: <fred@ourdomain.com>
+    data
+    From: Me <erco@seriss.com>
+    Subject: Test email to fred
+
+    Test message line 1.
+    Test line 2.
+    .
+    quit
+    EOF
+
+This uses nc(1) to make a TCP connection to the localhost address 127.0.0.1
+to simulate an actual SMTP network transaction.
+
+This should send a simple test message through mailrecv, appending the message
+to the file /var/tmp/fred-mail.txt.
+
+You can check for errors from mailrecv in the syslog; just look for entries that
+include MAILRECV, e.g.
+
+    tail -f /var/log/syslog | grep MAILRECV
+
+To allow other remote IP addresses to reach the mailrecv server, carefully add those
+IP addresses to the 'allow remotehost' command. To allow anyone on the internet
+to send mail to the fred@mydomain.com address, you could use 'allow remotehost .*'
+which will match everything.
+
 =back
 
 =head1 SEE ALSO
 
 =over
 
-=item mailrecv(8)
+mailrecv(8)
 
 =back
 
@@ -278,7 +507,7 @@ https://github.com/erco77/mailrecv/issues
 
 =over
 
-=item Greg Ercolano, Los Angeles, Calif. USA
+Greg Ercolano, Los Angeles, Calif. USA
 
 =back
 
