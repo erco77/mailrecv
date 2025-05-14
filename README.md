@@ -317,9 +317,9 @@ TESTING
 
 DOCUMENTATION
 
-    See the docs/ directory for the html docs for:
-    * [mailrecv](https://htmlpreview.github.io/?https://github.com/erco77/mailrecv/blob/master/docs/mailrecv.html)
-    * [mailrecv.conf](https://htmlpreview.github.io/?https://github.com/erco77/mailrecv/blob/master/docs/mailrecv.conf.html)
+See the docs/ directory for the html docs for:
+* [mailrecv](https://htmlpreview.github.io/?https://github.com/erco77/mailrecv/blob/master/docs/mailrecv.html)
+* [mailrecv.conf](https://htmlpreview.github.io/?https://github.com/erco77/mailrecv/blob/master/docs/mailrecv.conf.html)
 
 FEATURES
 
