@@ -46,6 +46,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <iomanip>
 
 using namespace std;
 
@@ -112,7 +113,7 @@ struct tm* GetLocaltime(void) {
 //                      %a   %d %b  %G   %H %M %S  %z     %Z
 void GetRFCDate(char *datestr, int len) {
     strftime(datestr, len,
-             "%a, %d %b %G %H:%M:%S %z (%Z)", GetLocaltime());
+             "%a, %d %b %Y %H:%M:%S %z (%Z)", GetLocaltime());
     datestr[0] = toupper(datestr[0]);  // upcase first letter of day abbrev
 }
 
@@ -180,36 +181,20 @@ void Log(const char *msg, ...) {
 // Return ASCII only version of string 's', with binary encoded as hex <0x##>
 //     NOTE: in the following, "ASCII" is defined as per RFC 822 4.1.2.
 //
-char *AsciiHexEncode(const char *s, int allow_crlf=0) {
-    // First pass: determine how large output string needs to be
-    int outlen = 0;
-    const char *ss = s;
-    while ( *ss ) {
-        if ( *ss >= 0x20 && *ss <= 0x7e )   // Printable ASCII? (RFC 822 4.1.2)
-            { ++outlen; }                   // OK
-        else if ( allow_crlf && (*ss == '\r' || *ss == '\n') ) // CRLF allowed?
-            { ++outlen; }                   // OK
-        else
-            { outlen += 6; }                // 6 chars for every one binary char
-        ++ss;
-    }
-    ++outlen; // leave room for terminating NULL
-    char *buf = (char*)malloc(outlen);
-    char *out = buf;
-    ss = s;
-    while ( *ss ) {
-        if ( *ss >= 0x20 && *ss <= 0x7e )   // Printable ASCII?
-            { *out++ = *ss; }               // OK
-        else if ( allow_crlf && (*ss == '\r' || *ss == '\n') ) // CRLF allowed?
-            { *out++ = *ss; }               // OK
-        else {
-            sprintf(out, "<0x%02x>", (unsigned char)*ss);  // write hex code
-            out += 6;                       // move past hex code
+string AsciiHexEncode(const char *s, bool allow_crlf=false) {
+    ostringstream out;
+    for (; *s; s++) {
+        if (*s >= 0x20 && *s <= 0x7e) {
+            out << *s;
+        } else if (allow_crlf && (*s == '\r' || *s == '\n')) {
+            out << *s;
+        } else {
+            // Show binary data as <0x##>
+            out << "<0x" << std::hex << std::setw(2) 
+                << std::setfill('0') << (((unsigned int)*s) & 0xff) << std::dec << ">";
         }
-        ++ss;
     }
-    *out = 0;
-    return buf;
+    return out.str();
 }
 
 // Check if string 's' contains any binary data, return 1 if so.
@@ -293,6 +278,7 @@ int AppendMailToFile(const char *mail_from,         // SMTP 'mail from:'
                      const char *rcpt_to,           // SMTP 'rcpt to:'
                      const vector<string>& letter,  // email contents, including headers, blank line, body
                      const string& filename) {      // filename to append to
+    (void) rcpt_to; // unused currently
     bool locked = false;
     FILE *fp;
     // Open file for append
@@ -332,6 +318,7 @@ int PipeMailToCommand(const char *mail_from,        // SMTP 'mail from:'
                       const char *rcpt_to,          // SMTP 'rcpt to:'
                       const vector<string>& letter, // email contents, including headers, blank line, body
                       const string& command) {      // unix shell command to write to
+    (void) rcpt_to; // unused currently
     ISLOG("f") Log("DEBUG: popen(%s,'w')..\n", command.c_str());
     FILE *fp;
     if ( (fp = popen(command.c_str(), "w")) == NULL) {
@@ -845,16 +832,15 @@ public:
 
     // Modify 'letter', inserting Return-Path:/Received: headers (RFC 821, 4.1.1 'DATA')
     void AddReturnPath(vector<string>& letter, const char* in_mail_from) {
-        char *mail_from = strdup(in_mail_from); IsolateAddress(mail_from);
+        ostringstream return_path;
+        ostringstream received;
         char rfc_datestr[1024]; GetRFCDate(rfc_datestr, sizeof(rfc_datestr));
-        string return_path = string("Return-Path: <") + string(mail_from)
-                           + string(">");
-        string received    = string("Received: from ") + string(G_remotehost)
-                           + string(" by ") + string(G_localhost)
-                           + string(" via mailrecv (V ") + string(VERSION) + string(")")
-                           + string(" ; ") + string(rfc_datestr);
-        letter.insert(letter.begin()+0, return_path);   // Return-Path: at top
-        letter.insert(letter.begin()+1, received);      // Received: below Return-Path:
+        char *mail_from = strdup(in_mail_from); IsolateAddress(mail_from);
+        return_path << "Return-Path: <" << mail_from << ">";
+        received    << "Received: from " << G_remotehost << " by " << G_localhost
+                    << " via mailrecv (V " << VERSION << ") ; " << rfc_datestr;
+        letter.insert(letter.begin()+0, return_path.str());
+        letter.insert(letter.begin()+1, received.str());
         free(mail_from);
     }
 
@@ -1163,9 +1149,8 @@ int HandleSMTP() {
         ISLOG("s") {
             if ( G_conf.LogHex() ) {
                 // Handle if we should log any binary from the remote as hex
-                char *line_safe = AsciiHexEncode(line);
-                Log("DEBUG: SMTP cmd: %s\n", line_safe);
-                free(line_safe);
+                string line_safe = AsciiHexEncode(line);
+                Log("DEBUG: SMTP cmd: %s\n", line_safe.c_str());
             } else {
                 Log("DEBUG: SMTP cmd: %s\n", line);
             }

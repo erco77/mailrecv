@@ -39,7 +39,7 @@ struct tm* GetLocaltime(void) {
 //                      %a   %d %b  %G   %H %M %S  %z     %Z
 void GetRFCDate(char *datestr, int len) {
     strftime(datestr, len,
-             "%a, %d %b %G %H:%M:%S %z (%Z)", GetLocaltime());
+             "%a, %d %b %Y %H:%M:%S %z (%Z)", GetLocaltime());
     datestr[0] = toupper(datestr[0]);  // upcase first letter of day abbrev
 }
 
@@ -49,6 +49,41 @@ void GetLogDate(char *datestr, int len) {
     strftime(datestr, len, "%c", GetLocaltime());
 }
 
+// Isolate the email address
+//     "Foo Bar <foo@bar.com>" -> "foo@bar.com"
+//     "<foo@bar.com>" -> "foo@bar.com"
+//     "foo@bar.com" -> "foo@bar.com"
+//
+void IsolateAddress(char* s) {
+    char *p = s;
+    // Skip leading white
+    while ( *p == ' ' || *p == '\t' ) p++;
+    // Has angle brackets?
+    //     Could be "Full Name <a@b>" or "<a@b>" or "<a@b" or "<<<a@b>"..
+    //
+    if ( strchr(p, '<') ) {              // any '<'s?
+        p = strchr(p, '<');              // skip possible "Full Name"
+        while ( *p ) {                   // parse up to closing '>'
+            if ( *p == '<' ) { ++p; }    // skip /all/ '<'s
+            else if ( *p == '>' ) break; // stop at first '>'
+            else *s++ = *p++;
+        }
+        *s = 0;
+        return;
+    } else {
+        // No leading angle bracket?
+        //     Isolated address ("a@b") or malformed ("a@b>")
+        //
+        while ( *p ) {
+            if ( *p == '>' ) break;     // "a@b>" -> "a@b"
+            *s++ = *p++;
+        }
+        *s = 0;                         // eol
+        return;
+    }
+}
+
+/*** OLD
 // Modify 'letter', inserting Return-Path:/Received: headers (RFC 821, 4.1.1 'DATA')
 void AddReturnPath(vector<string>& letter, const char* mail_from) {
     char rfc_datestr[1024]; GetRFCDate(rfc_datestr, sizeof(rfc_datestr));
@@ -59,6 +94,21 @@ void AddReturnPath(vector<string>& letter, const char* mail_from) {
                        + string(" ; ") + string(rfc_datestr);
     letter.insert(letter.begin()+0, return_path);   // Return-Path: at top
     letter.insert(letter.begin()+1, received);      // Received: below Return-Path:
+}
+***/
+
+// Modify 'letter', inserting Return-Path:/Received: headers (RFC 821, 4.1.1 'DATA')
+void AddReturnPath(vector<string>& letter, const char* in_mail_from) {
+    ostringstream return_path;
+    ostringstream received;
+    char rfc_datestr[1024]; GetRFCDate(rfc_datestr, sizeof(rfc_datestr));
+    char *mail_from = strdup(in_mail_from); IsolateAddress(mail_from);
+    return_path << "Return-Path: <" << mail_from << ">";
+    received    << "Received: from " << G_remotehost << " by " << G_localhost
+                << " via mailrecv (V " << VERSION << ") ; " << rfc_datestr;
+    letter.insert(letter.begin()+0, return_path.str());
+    letter.insert(letter.begin()+1, received.str());
+    free(mail_from);
 }
 
 // Show letter on stdout
