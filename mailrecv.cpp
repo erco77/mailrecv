@@ -1064,8 +1064,8 @@ int SMTP_ReadLetter(FILE *fp,                    // [in] connection to remote
         StripCRLF(s);
         ISLOG("l") Log("DEBUG: Letter: '%s'\n", s);
         // End of letter? done
-        if ( strcmp(s, ".") == 0 ) return 0;    // <CRLF>.<CRLF>
-        if ( strncmp(s, "From ") == 0 ) EscapeFrom(s);   // "From .." -> ">From .."
+        if ( strcmp(s, ".") == 0 ) return 0;                // <CRLF>.<CRLF>
+        if ( strncmp(s, "From ", 5) == 0 ) EscapeFrom(s);   // "From .." -> ">From .."
         // Check limit
         bytecount += strlen(s);
         if ( G_conf.CheckLimit(bytecount, "smtp_data_size", emsg) < 0 ) {
