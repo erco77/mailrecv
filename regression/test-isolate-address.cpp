@@ -1,62 +1,83 @@
 // vim: autoindent tabstop=8 shiftwidth=4 expandtab softtabstop=4
 
 #include <stdio.h>
-#include <string.h>
+#include <ctype.h>      // toupper()
+#include <time.h>       // time(), localtime()..
+#include <string.h>     // strchr()
+#include <errno.h>      // errno
+#include <stdlib.h>     // exit()
+#include <unistd.h>     // sleep(), gethostname()
+#include <stdarg.h>     // vargs
+#include <syslog.h>     // syslog()
+#include <pcre.h>       // perl regex API (see 'man pcreapi(3)')
+#include <sys/socket.h> // getpeername()
+#include <netdb.h>      // gethostbyaddr(), NI_MAXHOST..
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sys/file.h>   // flock()
+#include <pthread.h>    // pthread_create() for execution timer
 
-// Isolate the email address
+// STL
+#include <string>
+#include <cctype>       // std::toupper()
+#include <vector>
+#include <sstream>
+#include <iostream>     // std::cin
+#include <iomanip>
+
+using namespace std;
+
+// Isolate email address in 's'
 //     "Foo Bar <foo@bar.com>" -> "foo@bar.com"
 //     "<foo@bar.com>" -> "foo@bar.com"
 //     "foo@bar.com" -> "foo@bar.com"
 //
-void IsolateAddress(char* s) {
-    char *p = s;
+void IsolateAddress(string& s) {
+    size_t i;
     // Skip leading white
-    while ( *p == ' ' || *p == '\t' ) p++;
-    // Has angle brackets?
-    //     Could be "Full Name <a@b>" or "<a@b>" or "<a@b" or "<<<a@b>"..
-    //
-    if ( strchr(p, '<') ) {              // any '<'s?
-        p = strchr(p, '<');              // skip possible "Full Name"
-        while ( *p ) {                   // parse up to closing '>'
-	    if ( *p == '<' ) { ++p; }    // skip /all/ '<'s
-	    else if ( *p == '>' ) break; // stop at first '>'
-	    else *s++ = *p++;
-	}
-	*s = 0;
-	return;
-    } else {
-	// No leading angle bracket?
-	//     Isolated address ("a@b") or malformed ("a@b>")
-	//
-	while ( *p ) {
-	    if ( *p == '>' ) break;     // "a@b>" -> "a@b"
-	    *s++ = *p++;
-	}
-	*s = 0;                         // eol
-	return;
+    while (s[0] == ' ' || s[0] == '\t') s.erase(0,1);
+    while ((i = s.find('<')) != string::npos) {  // any '<'s? skip possible "Full Name"
+        s.erase(0, i+1);                         // erase up to and including '<'
+    }
+    if ((i = s.find('>')) != string::npos) {     // find closing '>'?
+        s.erase(i);                              // erase from index to eos
+    }
+    return;
+}
+
+void Test(string s, const string expect) {
+    printf("BEFORE: '%s'\n", s.c_str());
+    IsolateAddress(s);
+    printf(" AFTER: '%s'\n\n", s.c_str());
+    if (s != expect) {
+        printf("*** FAIL *** expected '%s'\n", expect.c_str());
+        printf("                  got '%s'\n", s.c_str());
+        exit(1);
     }
 }
 
 int main() {
-    char s[80];
-    strcpy(s, "a@b");               printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "  <a@bcd>");         printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "    ");              printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "<foo@bar>");         printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "   <<<foo@bar>");    printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "<<<foo@bar>");       printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "<foo@bar>>>");       printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "Foo Bar <foo@bar>"); printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "<f@b");              printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "f@b>");              printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "<>");                printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "aaaaaaaaa");         printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    strcpy(s, "  <>");              printf("BEFORE: '%s'\n", s); IsolateAddress(s); printf(" AFTER: '%s'\n\n", s);
-    while ( fgets(s, 80, stdin) ) {
-        s[strlen(s)-1] = 0;     // trim crlf
-        printf("BEFORE: '%s'\n", s);
+    Test("a@b",               "a@b");
+    Test("  <a@bcd>",         "a@bcd");
+    Test("    ",              "");
+    Test("<foo@bar>",         "foo@bar");
+    Test("   <<<foo@bar>",    "foo@bar");
+    Test("<<<foo@bar>",       "foo@bar");
+    Test("<foo@bar>>>",       "foo@bar");
+    Test("Foo Bar <foo@bar>", "foo@bar");
+    Test("<f@b",              "f@b");
+    Test("f@b>",              "f@b");
+    Test("<>",                "");
+    Test("aaaaaaaaa",         "aaaaaaaaa");
+    Test("  <>",              "");
+    printf("*** PASSED ***\n");
+/***
+    while ( std::getline(std::cin, s)) {
+        Test(s):
+        printf("BEFORE: '%s'\n", s.c_str());
         IsolateAddress(s);
-        printf(" AFTER: '%s'\n", s);
+        printf(" AFTER: '%s'\n", s.c_str());
     }
+***/
     return 0;
 }

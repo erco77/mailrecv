@@ -25,6 +25,9 @@
 
 using namespace std;
 
+#define GREEN  (isatty(1)?"\033[32m":"")
+#define NORMAL (isatty(1)?"\033[0m":"")
+
 // Return ASCII only version of string 's', with binary encoded as hex <0x##>
 //     NOTE: in the following, "ASCII" is defined as per RFC 822 4.1.2.
 //
@@ -44,25 +47,55 @@ string AsciiHexEncode(const char *s, bool allow_crlf=false) {
     return out.str();
 }
 
+// Escape "From .." with ">From .."
+void EscapeFrom(char *s) {
+    string out = string(">") + string(s);
+    strcpy(s, out.c_str());
+}
+
+void TestHexEncode(string before, string expect, bool allow_crlf) {
+    string after = AsciiHexEncode(before.c_str(), allow_crlf);
+    printf("BEFORE: '%s'\n", before.c_str());
+    printf(" AFTER: '%s'\n", after.c_str());
+    if (after != expect) {
+        printf("*** FAIL *** expected '%s'\n", expect.c_str());
+        printf("                  got '%s'\n", after.c_str());
+        exit(1);
+    }
+}
+
 int main() {
-    bool allow_crlf = true;
-    bool no_crlf    = false;
-    const char *test1 = "This is \x03 a test \x80 \x81.";
-    const char *test2 = "This is \x03 a test \x80 \x81 of line 0001.\r\nLine 0002\r\n";
+    // Test Hex Encode
+    {
+        bool allow_crlf = true;
+        bool no_crlf    = false;
 
-    printf("BEFORE: '%s'\n", test1);
-    printf(" AFTER: '%s'\n", AsciiHexEncode(test1, no_crlf).c_str());
-    printf("\n");
+        const char *test1        = "This is \x03 a test \x80 \x81.";
+        const char *test1_expect = "This is <0x03> a test <0x80> <0x81>.";
 
-    printf("--- Allow CRLF\n");
-    printf("BEFORE:\n%s", test2);
-    printf(" AFTER:\n'%s'\n", AsciiHexEncode(test2, allow_crlf).c_str());
-    printf("\n");
+        const char *test2                   = "This is \x03 a test \x80 \x81 of line 0001.\r\nLine 0002\r\n";
+        const char *test2_expect_allow_crlf = "This is <0x03> a test <0x80> <0x81> of line 0001.\r\nLine 0002\r\n";
+        const char *test2_expect_no_crlf    = "This is <0x03> a test <0x80> <0x81> of line 0001.<0x0d><0x0a>Line 0002<0x0d><0x0a>";
 
-    printf("--- NO CRLF\n");
-    printf("BEFORE:\n%s", test2);
-    printf(" AFTER:\n'%s'\n", AsciiHexEncode(test2, no_crlf).c_str());
-    printf("\n");
+        TestHexEncode(test1, test1_expect, no_crlf);
+        printf("--- Allow CRLF\n");
+        TestHexEncode(test2, test2_expect_allow_crlf, allow_crlf);
+        printf("--- NO CRLF\n");
+        TestHexEncode(test2, test2_expect_no_crlf, no_crlf);
+    }
 
+    // Test "From" escape
+    {
+        char s[80]; strcpy(s, "From <someone@foo.com>");
+        printf("Test 'From' escaping\n");
+        printf("BEFORE: %s\n", s);
+        EscapeFrom(s);
+        printf(" AFTER: %s\n", s);
+        if (strcmp(s, ">From <someone@foo.com>") != 0) {
+            printf("*** FAIL ***\n");
+            exit(1);
+        }
+    }
+    printf("%s*** PASS ***%s\n", GREEN, NORMAL);
     return 0;
 }

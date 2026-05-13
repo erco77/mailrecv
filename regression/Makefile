@@ -1,6 +1,6 @@
-VERSION=x.xx
-SHELL=/bin/sh
-CXXFLAGS=-Wall -Wextra -DVERSION=\"$(VERSION)\" -I/opt/homebrew/include
+VERSION  = x.xx
+SHELL    = /bin/sh
+CXXFLAGS = -std=c++11 -Wall -Wextra -DVERSION=\"$(VERSION)\" -I/opt/homebrew/include
 
 default: test-isolate-address \
          test-insert-return-path \

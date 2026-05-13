@@ -2,7 +2,7 @@ VERSION = 1.28
 SHELL   = /bin/sh
 NROFF   = nroff
 POD2MAN = pod2man --center "mailrecv Documentation"
-CXXFLAGS=-Wall -Wextra -DVERSION=\"$(VERSION)\" -I/opt/homebrew/include
+CXXFLAGS= -std=c++11 -Wall -Wextra -DVERSION=\"$(VERSION)\" -I/opt/homebrew/include
 
 # Default build
 all: mailrecv man html

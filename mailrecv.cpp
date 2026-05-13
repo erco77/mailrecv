@@ -44,6 +44,7 @@
 
 // STL
 #include <string>
+#include <cctype>       // std::toupper()
 #include <vector>
 #include <sstream>
 #include <iomanip>
@@ -101,36 +102,31 @@ int LogUnlock() {
     return(0);
 }
 
-// Return current time as localtime()
-struct tm* GetLocaltime(void) {
-    time_t secs;        // Current UNIX time
-    time(&secs);
-    return localtime(&secs);
-}
-
 // Return date as e.g. 'Fri, 24 Apr 2026 16:28:03 -0700 (PDT)'
 //                      |    |  |   |    |  |  |   |      |
 //                      %a   %d %b  %G   %H %M %S  %z     %Z
-void GetRFCDate(char *datestr, int len) {
-    strftime(datestr, len,
-             "%a, %d %b %Y %H:%M:%S %z (%Z)", GetLocaltime());
-    datestr[0] = toupper(datestr[0]);  // upcase first letter of day abbrev
+string GetRFCDate() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm = *std::localtime(&t);
+    ostringstream os; os << std::put_time(&tm, "%a, %d %b %Y %H:%M:%S %z (%Z)");
+    string s = os.str();
+    s[0] = std::toupper(static_cast<unsigned char>(s[0]));
+    return s;
 }
 
 // Return date string in current locale format, e.g. 'Thu May  7 08:54:15 PDT 2026'
-void GetLogDate(char *datestr, int len) {
-    // POSIX locale: "%a %b %e %H:%M:%S %Y" 
-    strftime(datestr, len, "%c", GetLocaltime());
+string GetLogDate() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm = *std::localtime(&t);
+    ostringstream os; os << std::put_time(&tm, "%c");    // POSIX locale, usually: "%a %b %e %H:%M:%S %Y"
+    return os.str();
 }
 
 // Log prefix: each line in log prefixed by this string (date/time/etc)
 void GetLogPrefix(string &return_msg) {
     ostringstream os;
-    char datestr[1024];
-
-    GetLogDate(datestr, sizeof(datestr));    // current time/date as string
     // Log date/time/pid
-    os << datestr << " " << PROGNAME << "_V" << VERSION << "[" << getpid() << "]: ";
+    os << GetLogDate() << " " << PROGNAME << "_V" << VERSION << "[" << getpid() << "]: ";
     // Fail2ban filtering: show remote ip after pid in every line of log output
     ISLOG("F") os << "[" << G_remoteip << "] ";
     // Return result
@@ -334,38 +330,22 @@ int PipeMailToCommand(const char *mail_from,        // SMTP 'mail from:'
     return 1;       // success
 }
 
-// Isolate the email address
+// Isolate email address in 's'
 //     "Foo Bar <foo@bar.com>" -> "foo@bar.com"
 //     "<foo@bar.com>" -> "foo@bar.com"
 //     "foo@bar.com" -> "foo@bar.com"
 //
-void IsolateAddress(char* s) {
-    char *p = s;
+void IsolateAddress(string& s) {
+    size_t i;
     // Skip leading white
-    while ( *p == ' ' || *p == '\t' ) p++;
-    // Has angle brackets?
-    //     Could be "Full Name <a@b>" or "<a@b>" or "<a@b" or "<<<a@b>"..
-    //
-    if ( strchr(p, '<') ) {              // any '<'s?
-        p = strchr(p, '<');              // skip possible "Full Name"
-        while ( *p ) {                   // parse up to closing '>'
-            if ( *p == '<' ) { ++p; }    // skip /all/ '<'s
-            else if ( *p == '>' ) break; // stop at first '>'
-            else *s++ = *p++;
-        }
-        *s = 0;
-        return;
-    } else {
-        // No leading angle bracket?
-        //     Isolated address ("a@b") or malformed ("a@b>")
-        //
-        while ( *p ) {
-            if ( *p == '>' ) break;     // "a@b>" -> "a@b"
-            *s++ = *p++;
-        }
-        *s = 0;                         // eol
-        return;
+    while (s[0] == ' ' || s[0] == '\t') s.erase(0,1);
+    while ((i = s.find('<')) != string::npos) {  // any '<'s? skip possible "Full Name"
+        s.erase(0, i+1);                         // erase up to and including '<'
     }
+    if ((i = s.find('>')) != string::npos) {     // find closing '>'?
+        s.erase(i);                              // erase from index to eos
+    }
+    return;
 }
 
 // Class to manage a group of regex patterns
@@ -834,14 +814,12 @@ public:
     void AddReturnPath(vector<string>& letter, const char* in_mail_from) {
         ostringstream return_path;
         ostringstream received;
-        char rfc_datestr[1024]; GetRFCDate(rfc_datestr, sizeof(rfc_datestr));
-        char *mail_from = strdup(in_mail_from); IsolateAddress(mail_from);
+        string mail_from = in_mail_from; IsolateAddress(mail_from);
         return_path << "Return-Path: <" << mail_from << ">";
         received    << "Received: from " << G_remotehost << " by " << G_localhost
-                    << " via mailrecv (V " << VERSION << ") ; " << rfc_datestr;
+                    << " via mailrecv (V " << VERSION << ") ; " << GetRFCDate();
         letter.insert(letter.begin()+0, return_path.str());
         letter.insert(letter.begin()+1, received.str());
-        free(mail_from);
     }
 
     // Deliver mail to recipient.
@@ -915,12 +893,12 @@ public:
     //    0 -- OK to deliver -- not an error address
     //   -1 -- Reject delivery -- send error message in 'emsg' to remote
     //
-    int CheckErrorAddress(const char *address, string& emsg) {
+    int CheckErrorAddress(const string& address, string& emsg) {
         size_t t;
         // First, ignore address configured for regular delivery..
         // ..rcpt_to file?
         for ( t=0; t<deliver_rcpt_to_file_address.size(); t++ ) {
-            if ( strcmp(address, deliver_rcpt_to_file_address[t].c_str()) == 0 ) {
+            if ( address == deliver_rcpt_to_file_address[t] ) {    // strcmp(string,string)
                 if ( IsRemoteAllowedByGroup(deliver_rcpt_to_file_allowgroups[t].c_str()) ) {
                     return 0;         // OK to deliver
                 } else {
@@ -931,7 +909,7 @@ public:
         }
         // ..rcpt_to pipe?
         for ( t=0; t<deliver_rcpt_to_pipe_address.size(); t++ ) {
-            if ( strcmp(address, deliver_rcpt_to_pipe_address[t].c_str()) == 0 ) {
+            if ( address == deliver_rcpt_to_pipe_address[t] ) {   // strcmp(string,string)
                 if ( IsRemoteAllowedByGroup(deliver_rcpt_to_pipe_allowgroups[t].c_str()) ) {
                     return 0;         // OK to deliver
                 } else {
@@ -942,11 +920,10 @@ public:
         }
         // Check error addresses last
         for ( t=0; t<errors_rcpt_to_regex.size(); t++ ) {
-            if ( RegexMatch(errors_rcpt_to_regex[t].c_str(), address) == 1 ) { // reject address configured?
-                emsg = errors_rcpt_to_message[t];
-                emsg += " '";
-                emsg += address;
-                emsg += "'";
+            if ( RegexMatch(errors_rcpt_to_regex[t].c_str(), address.c_str()) == 1 ) { // reject address configured?
+                ostringstream os;
+                os << errors_rcpt_to_message[t] << " '" << address << "'";
+                emsg = os.str();
                 return -1;  // return error msg
             }
         }
@@ -1047,6 +1024,12 @@ void StripCRLF(char *s) {
     if ( (eol = strchr(s, '\n')) ) { *eol = 0; }
 }
 
+// Escape "From .." with ">From .."
+void EscapeFrom(char *s) {
+    string out = string(">") + string(s);
+    strcpy(s, out.c_str());
+}
+
 #define ISCMD(x)        !strcasecmp(cmd, x)
 #define ISARG1(x)       !strcasecmp(arg1, x)
 
@@ -1074,6 +1057,7 @@ int SMTP_ReadLetter(FILE *fp,                    // [in] connection to remote
         ISLOG("l") Log("DEBUG: Letter: '%s'\n", s);
         // End of letter? done
         if ( strcmp(s, ".") == 0 ) return 0;    // <CRLF>.<CRLF>
+        if ( strncmp(s, "From ") == 0 ) EscapeFrom(s);   // "From .." -> ">From .."
         // Check limit
         bytecount += strlen(s);
         if ( G_conf.CheckLimit(bytecount, "smtp_data_size", emsg) < 0 ) {
@@ -1229,7 +1213,7 @@ int HandleSMTP() {
                 Log("ERROR: 'RCPT' before 'MAIL': bad sequence of commands\n", arg1);
                 goto command_done;
             }
-            char *address;
+            string address;
             if ( ISARG1("TO:") ) {                             // "RCPT TO: foo@bar.com" (not recommended RFC 5321)
                 address = arg2;
                 goto rcpt_to;
@@ -1430,7 +1414,9 @@ int main(int argc, const char *argv[]) {
     for (int t=1; t<argc; t++) {
         if (strcmp(argv[t], "-c") == 0) {
             if (++t >= argc) {
-                Log("ERROR: expected filename after '-c'\n");
+                string emsg = "ERROR: expected filename after '-c'\n";
+                Log(emsg.c_str());
+                fprintf(stderr, "%s: %s", argv[0], emsg.c_str());
                 return 1;
             }
             conffile = argv[t];
@@ -1446,7 +1432,9 @@ int main(int argc, const char *argv[]) {
             }
         } else if (strcmp(argv[t], "-l") == 0) {
             if (++t >= argc) {
-                Log("ERROR: expected syslog|filename after '-l'\n");
+                string emsg = "ERROR: expected syslog|filename after '-l'\n";
+                Log(emsg.c_str());
+                fprintf(stderr, "%s: %s", argv[0], emsg.c_str());
                 return 1;
             }
             if ( strcmp(argv[t], "syslog") == 0 ) {
@@ -1455,12 +1443,14 @@ int main(int argc, const char *argv[]) {
             } else {
                 G_logfilename = strdup(argv[t]);
             }
-        } else if (strncmp(argv[t], "-h", 2) == 0) {
+        } else if (strncmp(argv[t], "-h", 2) == 0 ||   // -h, -help
+                   strcmp(argv[t], "--help") == 0) {   // --help
             HelpAndExit();
         } else {
-            Log("ERROR: unknown argument '%s'\n", argv[t]);
+            string emsg = "ERROR: unknown argument '" + string(argv[t]) + "'\n";
+            Log(emsg.c_str());
+            fprintf(stderr, "%s: %s", argv[0], emsg.c_str());
             exit(1);
-            // HelpAndExit();   // bad: shows up on remote
         }
     }
 
