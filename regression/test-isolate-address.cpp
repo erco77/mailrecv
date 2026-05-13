@@ -27,6 +27,10 @@
 
 using namespace std;
 
+#define RED    (isatty(1)?"\033[31m":"")
+#define GREEN  (isatty(1)?"\033[32m":"")
+#define NORMAL (isatty(1)?"\033[0m":"")
+
 // Isolate email address in 's'
 //     "Foo Bar <foo@bar.com>" -> "foo@bar.com"
 //     "<foo@bar.com>" -> "foo@bar.com"
@@ -50,8 +54,10 @@ void Test(string s, const string expect) {
     IsolateAddress(s);
     printf(" AFTER: '%s'\n\n", s.c_str());
     if (s != expect) {
+        printf("%s", RED);
         printf("*** FAIL *** expected '%s'\n", expect.c_str());
         printf("                  got '%s'\n", s.c_str());
+        printf("%s", NORMAL);
         exit(1);
     }
 }
@@ -70,7 +76,7 @@ int main() {
     Test("<>",                "");
     Test("aaaaaaaaa",         "aaaaaaaaa");
     Test("  <>",              "");
-    printf("*** PASSED ***\n");
+    printf("%s*** PASSED ***%s\n", GREEN, NORMAL);
 /***
     while ( std::getline(std::cin, s)) {
         Test(s):
