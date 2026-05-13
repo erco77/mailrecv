@@ -73,7 +73,7 @@ enum {
 const char *G_debugflags = "";            // debug logging flags (see mailrecv.conf for description)
 char        G_localhost[256];             // local hostname
 char        G_remotehost[256];            // Remote's hostname
-char        G_remoteip[NI_MAXHOST];       // Remote's IP address
+char        G_remoteip[NI_MAXHOST];       // Remote's IP address (large enough for ipv6)
 char       *G_logfilename = NULL;         // log filename if configured (if NULL, uses syslog)
 FILE       *G_logfp = NULL;               // log file pointer (remains open for duration of process)
 
@@ -980,6 +980,14 @@ void GetLocalHostname(char *hostname, int len) {
 //    -1 -- could not determine any remote info
 //
 int GetRemoteHostInfo(int fd) {
+    // stdin/out/err a tty? If so, user testing on the command line
+    if (isatty(0) || isatty(1) || isatty(2)) {
+        strcpy(G_remoteip, "127.0.0.1");
+        strcpy(G_remotehost, "(local-tty)");
+        return 0;
+    }
+
+    // Initial state unknown (in case ip/host lookups fail)
     strcpy(G_remoteip, "?.?.?.?");
     strcpy(G_remotehost, "???");
 
