@@ -111,12 +111,12 @@ INSTALL INSTRUCTIONS
     One can test the server from a shell using 'netcat', e.g.
 
         $ nc localhost 25                               <-- run this to connect to mailrecv
-        220 mydomain.com SMTP (RFC 822) mailrecv        <-- mailrecv's response
+        220 mydomain.com SMTP (RFC 821/822)             <-- mailrecv's response
         help                                            <-- type 'help' and hit ENTER
-        214 Help:                                       \
-            HELO, DATA, RSET, NOOP, QUIT,                |__ mailrecv responds with the
-            MAIL FROM:,  RCPT TO:,                       |   smtp commands it supports
-            VRFY, EXPN, EHLO, SEND, SOML, SAML, TURN    /
+        214-Help:
+        214-HELO, DATA, RSET, NOOP, QUIT,               <-- mailrecv responds with the
+        214-MAIL FROM:, RCPT TO:, VRFY, HELP,               SMTP commands it recognizes
+        214 EXPN, SEND, SOML, SAML, TURN
         quit                                            <-- type 'quit' and hit ENTER
         221 fltk.org closing connection                 <-- mailrecv finishes
         $
@@ -182,7 +182,7 @@ CONFIGURATION
     group of trusted servers. You can name groups anything you like,
     and add regex strings that can match domain names or ip addresses:
 
-        allowgroup +google_servers  ^mail[a-zA-z0-9-]*\.google\.com$
+        allowgroup +google_servers  ^mail[a-zA-Z0-9-]*\.google\.com$
         allowgroup +google_servers  \.google\.com$
 
     ..which creates a group called "+google_servers" which can then
@@ -210,8 +210,8 @@ CONFIGURATION
     email, you're better off configuring postfix, sendmail, qmail, etc)
 
     Each email address is configured with either a 'deliver rcpt_to' line
-    for pipes and redirection to files, or a 'error rcpt_to" line
-    to bounce back errors. e.g.
+    for pipes and redirection to files, or an 'error rcpt_to' line
+    to return an SMTP error. For example:
 
         deliver rcpt_to myarchive@mydomain.com pipe /some/command -arg
         deliver rcpt_to status@mydomain.com append /var/tmp/somestatus.txt
@@ -297,8 +297,8 @@ TESTING
         HELO yourhost            -- say hello
         QUIT
 
-   You can also test mail addresses using any of the supported
-   RFC 822 commands, e.g. "RCPT TO:", etc.
+   You can also test mail addresses using the supported RFC 821 SMTP
+   commands, such as "MAIL FROM:" and "RCPT TO:".
 
    To test ipv6, you can use the following on a machine that has
    an ipv6 internet address:
@@ -311,7 +311,7 @@ TESTING
 
        :
        Mon Aug  1 12:40:13 2022 MAILRECV[30276]: [2607:f220::d85c:1234] SMTP connection from remote host somehost.com [2607:f220::d85c:1234]
-       Mon Aug  1 12:40:13 2022 MAILRECV[30276]: [2607:f440::d85c:1234] DEBUG: SMTP reply: 220 serissdev.seriss.com SMTP (RFC 822)
+       Mon Aug  1 12:40:13 2022 MAILRECV[30276]: [2607:f440::d85c:1234] DEBUG: SMTP reply: 220 serissdev.seriss.com SMTP (RFC 821/822)
        Mon Aug  1 12:40:15 2022 MAILRECV[30276]: [2607:f440::d85c:1234] DEBUG: SMTP cmd: HELP
        :                                          --------------------
 
@@ -337,12 +337,12 @@ LIMITATIONS
    
     TBD.
 
-    This implements RFC822 protocol only (HELO), and does NOT handle
-    the extended SMTP protocol (EHLO) or any fancy secure email protocols
-    that use e.g. TLS.
+    Mailrecv implements basic RFC 821 SMTP using HELO and accepts message
+    content in RFC 822 format. It does not implement Extended SMTP (ESMTP)
+    features advertised through EHLO or secure transport such as TLS.
 
-    Proper mail servers should be able to realize mailrecv only understands
-    RFC822 commands, and will adjust the transaction accordingly.
+    Sending mail servers should fall back to basic SMTP after mailrecv
+    rejects EHLO.
 
 REPORTING BUGS
 

@@ -47,13 +47,14 @@ in the config file.
     - -- disables all debug logging
     a -- all (enables all optional flags)
     c -- show config file loading process
-    s -- show SMTP commands remote sent us
+    f -- show all open/close operations on files/pipes
+    F -- fail2ban style error messages (that include IP on same line)
+    h -- hostname/FCRDNS logging
     l -- show email contents as it's received (SMTP 'DATA' command's input)
     r -- show regex pattern match checks
-    f -- show all open/close operations on files/pipes
+    s -- show SMTP commands remote sent us
     w -- log non-essential warnings
-    F -- fail2ban style error messages (that include IP on same line)
-    + -- logs MAIL FROM/TO commands
+    + -- one line mail from/to/handler info (RECOMMENDED)
 
 =item -l syslog|filename
 

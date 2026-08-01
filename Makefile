@@ -1,4 +1,4 @@
-VERSION = 1.29
+VERSION = 1.30
 SHELL   = /bin/sh
 NROFF   = nroff
 POD2MAN = pod2man --center "mailrecv Documentation"
